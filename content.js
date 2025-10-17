@@ -1,6 +1,18 @@
 // Content script that runs on Airbnb wishlist pages
 let extractionInProgress = false;
 
+const safeSendRuntimeMessage = (payload) => {
+  try {
+    chrome.runtime.sendMessage(payload, () => {
+      if (chrome.runtime.lastError) {
+        console.debug('runtime.sendMessage ignored:', chrome.runtime.lastError.message);
+      }
+    });
+  } catch (error) {
+    console.error('Failed to send runtime message:', error);
+  }
+};
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'startExtraction' && !extractionInProgress) {
@@ -10,7 +22,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const propertyLinks = getPropertyLinks();
     
     if (propertyLinks.length === 0) {
-      chrome.runtime.sendMessage({
+      safeSendRuntimeMessage({
         action: 'error',
         error: 'No properties found on this page. Make sure you\'re on a wishlist page.'
       });
@@ -23,7 +35,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ propertyCount: propertyLinks.length });
     
     // Send links to background script to handle extraction
-    chrome.runtime.sendMessage({
+    safeSendRuntimeMessage({
       action: 'extractProperties',
       propertyLinks: propertyLinks
     });

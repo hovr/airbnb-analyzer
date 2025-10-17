@@ -1,14 +1,26 @@
 // Background service worker to handle tab operations and data extraction
 
+const safeSendRuntimeMessage = (payload) => {
+  try {
+    chrome.runtime.sendMessage(payload, () => {
+      if (chrome.runtime.lastError) {
+        console.debug('runtime.sendMessage ignored:', chrome.runtime.lastError.message);
+      }
+    });
+  } catch (error) {
+    console.error('Failed to send runtime message:', error);
+  }
+};
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  
+
   if (message.action === 'extractProperties') {
     // Start the extraction process
     extractAllProperties(message.propertyLinks);
     sendResponse({ status: 'started' });
     return true;
   }
-  
+
   // Forward progress/complete/error messages to popup
   if (message.action === 'progress' || message.action === 'complete' || message.action === 'error') {
     // This will be received by popup.js
@@ -36,7 +48,7 @@ async function extractAllProperties(propertyLinks) {
     const batchMessage = batchNumbers.join(', ');
     
     // Send progress update showing all properties in current batch
-    chrome.runtime.sendMessage({
+    safeSendRuntimeMessage({
       action: 'progress',
       current: batchMessage,
       total: propertyLinks.length,
@@ -87,7 +99,7 @@ async function extractAllProperties(propertyLinks) {
   });
 
   // Send completion message
-  chrome.runtime.sendMessage({
+  safeSendRuntimeMessage({
     action: 'complete',
     total: propertyLinks.length
   });
