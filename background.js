@@ -471,6 +471,59 @@ function extractReviewsOnly() {
       }
     }
     
+    const selectBestReviewText = (spanNodes) => {
+      const candidates = [];
+
+      spanNodes.forEach(span => {
+        const text = span.textContent.trim();
+        if (!text) {
+          return;
+        }
+        const lower = text.toLowerCase();
+        if (lower.includes('show more') || lower.includes('show original') || lower.includes('translated')) {
+          return;
+        }
+        if (span.children.length > 1) {
+          return;
+        }
+
+        let depth = 0;
+        let current = span;
+        while (current && current.parentElement) {
+          depth += 1;
+          current = current.parentElement;
+        }
+
+        candidates.push({
+          text,
+          length: text.length,
+          depth,
+          hasChild: span.children.length > 0
+        });
+      });
+
+      if (candidates.length === 0) {
+        return '';
+      }
+
+      const scoreForLength = (length) => {
+        if (length >= 300) return 3;
+        if (length >= 120) return 2;
+        if (length >= 40) return 1;
+        return 0;
+      };
+
+      candidates.sort((a, b) => {
+        const scoreDiff = scoreForLength(b.length) - scoreForLength(a.length);
+        if (scoreDiff !== 0) return scoreDiff;
+        if (b.length !== a.length) return b.length - a.length;
+        if (a.hasChild !== b.hasChild) return a.hasChild ? 1 : -1;
+        return a.depth - b.depth;
+      });
+
+      return candidates[0].text;
+    };
+
     reviewElements.forEach((reviewEl, index) => {
       const review = {
         text: '',
@@ -480,18 +533,7 @@ function extractReviewsOnly() {
 
       // Extract review text - find the longest meaningful span
       const textSpans = reviewEl.querySelectorAll('span');
-      let longestText = '';
-      
-      textSpans.forEach(span => {
-        const text = span.textContent.trim();
-        if (text.length > longestText.length && text.length > 50 && text.length < 3000) {
-          if (span.children.length === 0 || span.children.length === 1) {
-            longestText = text;
-          }
-        }
-      });
-      
-      review.text = longestText;
+      review.text = selectBestReviewText(textSpans);
 
       // Extract date
       const datePatterns = [
