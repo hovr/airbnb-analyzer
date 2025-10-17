@@ -136,11 +136,17 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
       
       try {
         // Scroll to load ALL reviews
-        await chrome.scripting.executeScript({
+        const scrollResult = await chrome.scripting.executeScript({
           target: { tabId: reviewsTab.id },
-          func: scrollAndLoadAllReviews
+          func: scrollAndLoadAllReviews,
+          args: [Number.parseInt(propertyData.reviewCount, 10) || null]
         });
         
+        const finalLoadedCount = scrollResult && scrollResult[0] ? scrollResult[0].result : null;
+        if (Number.isFinite(finalLoadedCount)) {
+          propertyData.loadedReviewCount = finalLoadedCount;
+        }
+
         // Wait for reviews to load
         await sleep(3000);
         
@@ -178,7 +184,8 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
     url: window.location.href,
     title: wishlistTitle || '',
     rating: wishlistRating || '',
-    reviewCount: wishlistReviewCount || '',
+    reviewCount: '',
+    expectedReviewCount: null,
     guests: '',
     bedrooms: '',
     beds: '',
@@ -188,6 +195,32 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
   };
 
   try {
+    const normalizeCount = (value) => {
+      if (value === undefined || value === null) {
+        return null;
+      }
+      const digits = value.toString().replace(/[^0-9]/g, '');
+      if (!digits) {
+        return null;
+      }
+      const parsed = Number.parseInt(digits, 10);
+      return Number.isNaN(parsed) ? null : parsed;
+    };
+
+    const applyReviewCount = (candidate) => {
+      const normalized = normalizeCount(candidate);
+      if (normalized === null) {
+        return false;
+      }
+      data.reviewCount = String(normalized);
+      data.expectedReviewCount = normalized;
+      return true;
+    };
+
+    if (!applyReviewCount(wishlistReviewCount) && wishlistReviewCount) {
+      data.reviewCount = wishlistReviewCount;
+    }
+
     // Only try to extract rating if we don't already have it from wishlist
     if (!data.rating) {
       console.log('Looking for rating on property page...');
@@ -198,15 +231,38 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
         console.log('Found rating link:', ratingLink.textContent);
         const ratingText = ratingLink.textContent;
         const ratingMatch = ratingText.match(/([\d.]+)/);
-        const reviewMatch = ratingText.match(/(\d{1,5})\s+review/i);
+        const reviewMatch = ratingText.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
         if (ratingMatch) {
           const fallbackRating = parseFloat(ratingMatch[1]);
           if (!Number.isNaN(fallbackRating) && fallbackRating > 0 && fallbackRating <= 5) {
             data.rating = ratingMatch[1];
           }
         }
-        if (reviewMatch) data.reviewCount = reviewMatch[1];
+        if (reviewMatch) {
+          applyReviewCount(reviewMatch[1]);
+        }
       }
+    }
+
+    if (!data.expectedReviewCount) {
+      const reviewButtons = [
+        document.querySelector('button[data-testid="pdp-show-all-reviews-button"]'),
+        document.querySelector('[data-testid="reviews-tab-panel"] button[data-testid="pdp-show-all-reviews-button"]'),
+        document.querySelector('[data-testid="reviews-tab"] button[data-testid="pdp-show-all-reviews-button"]'),
+        document.querySelector('[data-testid="rating-section"]')
+      ];
+
+      for (const node of reviewButtons) {
+        if (!node) continue;
+        const combinedText = `${node.textContent || ''} ${node.getAttribute('aria-label') || ''}`;
+        if (applyReviewCount(combinedText)) {
+          break;
+        }
+      }
+    }
+
+    if (!data.reviewCount && data.expectedReviewCount) {
+      data.reviewCount = String(data.expectedReviewCount);
     }
     
     console.log('Using rating:', data.rating, 'Review count:', data.reviewCount);
@@ -287,171 +343,211 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
 }
 
 // Scroll aggressively to load ALL reviews
-function scrollAndLoadAllReviews() {
-  return new Promise((resolve) => {
-    const clickLoadMoreReviewsButton = () => {
-      const buttons = Array.from(document.querySelectorAll('button'));
-      for (const button of buttons) {
-        const text = (button.textContent || '').trim().toLowerCase();
-        if (text.includes('show more') && text.includes('review') && !button.disabled) {
-          button.click();
-          return true;
-        }
+async function scrollAndLoadAllReviews(expectedTotal) {
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const dedupe = (elements) => {
+    const seen = new Set();
+    const result = [];
+    elements.forEach(el => {
+      if (el && !seen.has(el)) {
+        seen.add(el);
+        result.push(el);
       }
-      const ariaButton = document.querySelector('button[aria-label*="show more reviews" i]');
-      if (ariaButton && !ariaButton.disabled) {
-        ariaButton.click();
+    });
+    return result;
+  };
+
+  const dialogReady = () => {
+    const container = document.querySelector('[role="dialog"] div._17itzz4');
+    if (container) {
+      return container;
+    }
+    const standalone = document.querySelector('div._17itzz4');
+    return standalone || null;
+  };
+
+  const clickCandidates = (getters) => {
+    for (const getter of getters) {
+      const node = getter();
+      if (node && !node.disabled) {
+        const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
+        console.log('Clicking reviews control', text);
+        node.click();
         return true;
       }
-      return false;
-    };
+    }
+    return false;
+  };
 
-    const isScrollableElement = (element) => {
+  const ensureReviewsContainerOpen = async () => {
+    if (dialogReady()) {
+      return true;
+    }
+
+    const openers = [
+      () => document.querySelector('button[data-testid="pdp-show-all-reviews-button"]'),
+      () => Array.from(document.querySelectorAll('button[aria-label]')).find(btn => {
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        return aria.includes('show') && aria.includes('review');
+      }),
+      () => Array.from(document.querySelectorAll('button')).find(btn => {
+        const text = (btn.textContent || '').toLowerCase();
+        return text.includes('show all') && text.includes('review');
+      }),
+      () => Array.from(document.querySelectorAll('a[href*="/reviews"]')).find(link => {
+        const text = (link.textContent || '').toLowerCase();
+        return text.includes('review');
+      })
+    ];
+
+    if (clickCandidates(openers)) {
+      await wait(1400);
+      if (dialogReady()) {
+        return true;
+      }
+    }
+
+    await wait(400);
+    return Boolean(dialogReady());
+  };
+
+  const seenReviewIds = new Set();
+  const expected = Number.isFinite(expectedTotal) && expectedTotal > 0 ? expectedTotal : null;
+
+  const collectReviews = () => {
+    const reviewNodes = document.querySelectorAll('[data-review-id]');
+    reviewNodes.forEach(node => {
+      const reviewId = node.getAttribute('data-review-id') || node.id;
+      if (reviewId) {
+        seenReviewIds.add(reviewId);
+      }
+    });
+    return seenReviewIds.size;
+  };
+
+  const getScrollableTargets = () => {
+    const targets = [];
+
+    const dialog = document.querySelector('[role="dialog"]');
+    if (dialog) {
+      const modalSpecific = dialog.querySelector('div._17itzz4');
+      if (modalSpecific) {
+        targets.push(modalSpecific);
+      }
+      targets.push(...dialog.querySelectorAll('[style*="overflow"]'));
+    }
+
+    const selectors = [
+      'div._17itzz4',
+      '[data-testid="reviews-tab-panel"]',
+      '[data-section-id="REVIEWS_DEFAULT"]',
+      '[data-testid="reviews-tab"]',
+      '[data-testid="modal-container"]',
+      'main'
+    ];
+
+    selectors.forEach(selector => {
+      const el = document.querySelector(selector);
+      if (el) {
+        targets.push(el);
+      }
+    });
+
+    targets.push(document.scrollingElement, document.body, document.documentElement);
+
+    return dedupe(targets.filter(Boolean));
+  };
+
+  const scrollElement = (element) => {
+    try {
       if (!element) {
-        return false;
+        return;
       }
-      const style = getComputedStyle(element);
-      const overflowY = style.overflowY;
-
       if (element === document.body || element === document.documentElement) {
-        return element.scrollHeight > element.clientHeight + 20;
+        window.scrollBy(0, Math.max(600, window.innerHeight || 800));
+      } else if (typeof element.scrollBy === 'function') {
+        element.scrollBy({ top: element.clientHeight * 0.9, behavior: 'auto' });
+      } else if (typeof element.scrollTop === 'number') {
+        element.scrollTop = Math.min(element.scrollTop + element.clientHeight * 0.9, element.scrollHeight);
       }
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+    } catch (error) {
+      console.warn('Failed to scroll element', error);
+    }
+  };
 
-      if (overflowY === 'auto' || overflowY === 'scroll') {
-        return element.scrollHeight > element.clientHeight + 20;
+  const tryClickLoadMore = () => {
+    const loaders = [
+      () => document.querySelector('button[data-testid="pdp-review-paging-button"]'),
+      () => document.querySelector('button[data-testid="pdp-show-all-reviews-button"]'),
+      () => Array.from(document.querySelectorAll('button[aria-label]')).find(btn => {
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        return aria.includes('more') && aria.includes('review');
+      }),
+      () => Array.from(document.querySelectorAll('button')).find(btn => {
+        const text = (btn.textContent || '').toLowerCase();
+        return text.includes('show more') && text.includes('review');
+      })
+    ];
+
+    return clickCandidates(loaders);
+  };
+
+  await ensureReviewsContainerOpen();
+
+  let lastCount = collectReviews();
+  let idleCycles = 0;
+  const MAX_IDLE_CYCLES = expected ? Math.min(24, Math.max(10, Math.ceil(expected / 8))) : 15;
+  const MAX_SCROLL_CYCLES = expected ? Math.max(60, Math.ceil(expected * 1.5)) : 60;
+
+  console.log('Starting review loading with expected total:', expected || 'unknown');
+
+  for (let cycle = 1; cycle <= MAX_SCROLL_CYCLES; cycle += 1) {
+    await ensureReviewsContainerOpen();
+
+    const targets = getScrollableTargets();
+    if (!targets.length) {
+      idleCycles += 1;
+      console.log('No scrollable targets found, idle cycle', idleCycles);
+      if (idleCycles > MAX_IDLE_CYCLES) {
+        break;
       }
+      await wait(600);
+      continue;
+    }
 
-      return false;
-    };
+    targets.forEach(scrollElement);
+    const clicked = tryClickLoadMore();
+    await wait(clicked ? 2200 : 1200);
 
-    const findScrollableDescendant = (root) => {
-      if (!root) {
-        return null;
+    const currentCount = collectReviews();
+    console.log(`Cycle ${cycle}: seen ${currentCount} reviews (expected ${expected || 'unknown'})`);
+
+    if (expected && currentCount >= expected) {
+      console.log('Reached expected review total');
+      break;
+    }
+
+    if (currentCount > lastCount) {
+      idleCycles = 0;
+      lastCount = currentCount;
+    } else {
+      idleCycles += 1;
+      if (idleCycles > MAX_IDLE_CYCLES) {
+        break;
       }
-      if (isScrollableElement(root)) {
-        return root;
-      }
-      const descendants = root.querySelectorAll('*');
-      for (const descendant of descendants) {
-        if (isScrollableElement(descendant)) {
-          return descendant;
-        }
-      }
-      return null;
-    };
+    }
+  }
 
-    let scrollCount = 0;
-    let consecutiveNoChange = 0;
-    let scrollContainer = null;
-    let attemptsWithoutContainer = 0;
-    const seenReviewIds = new Set();
-    let lastUniqueReviewCount = 0;
-    let waitingForLoadMore = false;
+  const finalCount = collectReviews();
+  if (expected && finalCount < expected) {
+    console.warn('Failed to reach expected reviews', { expected, finalCount });
+  } else {
+    console.log('Finished loading reviews', { finalCount, expected });
+  }
 
-    console.log('Starting to scroll for reviews...');
-
-    const findScrollContainer = () => {
-      const candidates = [
-        document.querySelector('[role="dialog"]'),
-        document.querySelector('[data-testid="modal-container"]'),
-        document.querySelector('main'),
-        document.querySelector('[style*="overflow-y"]'),
-        document.querySelector('[style*="overflow: auto"]'),
-        document.body,
-        document.documentElement
-      ];
-
-      for (const candidate of candidates) {
-        const scrollable = findScrollableDescendant(candidate);
-        if (scrollable) {
-          console.log('Found scrollable container:', scrollable.tagName, scrollable.className || scrollable.id || '');
-          return scrollable;
-        }
-      }
-      const fallback = document.scrollingElement || document.body;
-      console.log('Falling back to scrolling element:', fallback.tagName || 'document');
-      return fallback;
-    };
-
-    const performScroll = () => {
-      if (!scrollContainer || !document.contains(scrollContainer)) {
-        scrollContainer = findScrollContainer();
-        if (!scrollContainer) {
-          attemptsWithoutContainer++;
-          console.log(`Waiting for reviews container (${attemptsWithoutContainer}/40)`);
-          if (attemptsWithoutContainer >= 40) {
-            clearInterval(scrollInterval);
-            resolve();
-            return;
-          }
-          return;
-        }
-        console.log('Using scroll container:', scrollContainer.tagName, scrollContainer.className || scrollContainer.id || '');
-      }
-
-      if (scrollContainer === document.body || scrollContainer === document.documentElement) {
-        window.scrollTo(0, document.body.scrollHeight);
-      } else if (typeof scrollContainer.scrollTo === 'function') {
-        scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'auto' });
-      } else {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }
-
-      scrollCount++;
-
-      const currentReviewElements = document.querySelectorAll('[data-review-id]');
-      currentReviewElements.forEach(el => {
-        const reviewId = el.getAttribute('data-review-id');
-        if (reviewId) {
-          seenReviewIds.add(reviewId);
-        }
-      });
-      const uniqueReviewCount = seenReviewIds.size;
-      console.log(`Scroll ${scrollCount}: Unique reviews seen ${uniqueReviewCount}`);
-
-      const loadMoreClicked = clickLoadMoreReviewsButton();
-      if (loadMoreClicked) {
-        console.log('Clicked load more reviews button');
-        waitingForLoadMore = true;
-      }
-
-      setTimeout(() => {
-        const newReviewElements = document.querySelectorAll('[data-review-id]');
-        newReviewElements.forEach(el => {
-          const reviewId = el.getAttribute('data-review-id');
-          if (reviewId) {
-            seenReviewIds.add(reviewId);
-          }
-        });
-        const newUniqueReviewCount = seenReviewIds.size;
-
-        if (newUniqueReviewCount > lastUniqueReviewCount) {
-          consecutiveNoChange = 0;
-          waitingForLoadMore = false;
-          console.log(`New reviews loaded! ${lastUniqueReviewCount} -> ${newUniqueReviewCount}`);
-        } else if (waitingForLoadMore) {
-          waitingForLoadMore = false;
-          console.log('No new reviews yet after load more click, waiting one more cycle...');
-        } else {
-          consecutiveNoChange++;
-          console.log(`No new unique reviews loaded (${consecutiveNoChange}/10)`);
-        }
-
-        lastUniqueReviewCount = newUniqueReviewCount;
-
-        if (scrollCount >= 100 || consecutiveNoChange >= 10) {
-          console.log(`Finished scrolling. Total unique reviews seen: ${newUniqueReviewCount}`);
-          setTimeout(resolve, 4000);
-        }
-      }, 1500);
-
-      if (scrollCount < 100 && consecutiveNoChange < 10) {
-        setTimeout(performScroll, 1500);
-      }
-    };
-
-    setTimeout(performScroll, 1000);
-  });
+  return finalCount;
 }
 
 // Extract only reviews from reviews page

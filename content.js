@@ -96,23 +96,47 @@ function getPropertyLinks() {
       let rating = '';
       let reviewCount = '';
       
-      // Look for rating in the card (usually shows "4.86 (72)")
+      // Look for rating and review count inside the card
       const cardContainer = card.closest('[data-testid="card-container"]') || card.parentElement;
       if (cardContainer) {
-        const ratingText = cardContainer.textContent;
-        // Pattern like "4.86 (72)" or "4.86·72 reviews"
-      const ratingPattern = /([0-5](?:\.\d{1,2})?)\s*[·(]\s*(\d{1,5})/;
-        const match = ratingText.match(ratingPattern);
-        if (match) {
-          rating = match[1];
-          reviewCount = match[2];
+        const textCandidates = [
+          cardContainer.textContent || ''
+        ];
+
+        const ariaReviewNode = cardContainer.querySelector('[aria-label*="review" i]');
+        if (ariaReviewNode && ariaReviewNode.getAttribute('aria-label')) {
+          textCandidates.unshift(ariaReviewNode.getAttribute('aria-label'));
+        }
+
+        for (const source of textCandidates) {
+        if (!source) {
+          continue;
+        }
+          if (!rating) {
+            const ratingMatch = source.match(/\b([0-5](?:\.\d{1,2})?)\b(?=\s*(?:out of|[·(]))/i);
+            if (ratingMatch) {
+              rating = ratingMatch[1];
+            }
+          }
+          if (!reviewCount) {
+            const reviewMatch = source.match(/\b(\d{1,4}(?:,\d{3})*)\b(?=\s*reviews?)/i);
+            if (reviewMatch) {
+              reviewCount = reviewMatch[1].replace(/,/g, '');
+              break;
+            }
+          }
         }
       }
       
       // Check if we already have this property
       const existingProperty = properties.find(p => p.url === url);
       if (!existingProperty) {
-        properties.push({ url, title, rating, reviewCount });
+        properties.push({
+          url,
+          title,
+          rating,
+          reviewCount
+        });
       }
     }
   });
