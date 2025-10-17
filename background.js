@@ -274,6 +274,23 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
 // Scroll aggressively to load ALL reviews
 function scrollAndLoadAllReviews() {
   return new Promise((resolve) => {
+    const clickLoadMoreReviewsButton = () => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      for (const button of buttons) {
+        const text = (button.textContent || '').trim().toLowerCase();
+        if (text.includes('show more') && text.includes('review') && !button.disabled) {
+          button.click();
+          return true;
+        }
+      }
+      const ariaButton = document.querySelector('button[aria-label*="show more reviews" i]');
+      if (ariaButton && !ariaButton.disabled) {
+        ariaButton.click();
+        return true;
+      }
+      return false;
+    };
+
     let scrollCount = 0;
     let consecutiveNoChange = 0;
     let scrollContainer = null;
@@ -377,23 +394,6 @@ function scrollAndLoadAllReviews() {
       }, 1500);
     }, 1500);
   });
-}
-
-function clickLoadMoreReviewsButton() {
-  const buttons = Array.from(document.querySelectorAll('button'));
-  for (const button of buttons) {
-    const text = (button.textContent || '').trim().toLowerCase();
-    if (text.includes('show more') && text.includes('review') && !button.disabled) {
-      button.click();
-      return true;
-    }
-  }
-  const ariaButton = document.querySelector('button[aria-label*="show more reviews" i]');
-  if (ariaButton && !ariaButton.disabled) {
-    ariaButton.click();
-    return true;
-  }
-  return false;
 }
 
 // Extract only reviews from reviews page
