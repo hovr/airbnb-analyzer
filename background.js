@@ -568,7 +568,9 @@ function extractReviewsOnly() {
 }
 
 function generateLLMPrompt(propertiesData) {
-  let prompt = `I'm analyzing ${propertiesData.length} Airbnb properties from my wishlist. I need you to carefully review each property's details and reviews, paying special attention to subtle hints and concerns that guests might mention even when giving high ratings. People often soften negative feedback or bury concerns in otherwise positive reviews, especially when the host is friendly.
+  let prompt = `Before you begin any analysis, ask me to clarify the must-have requirements for this trip (for example: minimum bedrooms, washer/dryer availability, budget range, accessibility needs, preferred neighbourhoods, or other deal-breakers). Wait for my response, then continue with the analysis below.
+
+I'm analyzing ${propertiesData.length} Airbnb properties from my wishlist. I need you to carefully review each property's details and reviews, paying special attention to subtle hints and concerns that guests might mention even when giving high ratings. People often soften negative feedback or bury concerns in otherwise positive reviews, especially when the host is friendly.
 
 Please analyze:
 1. Hidden red flags in reviews (e.g., mentions of issues followed by "but it was fine")
@@ -588,8 +590,12 @@ After analyzing all properties, provide:
 
   propertiesData.forEach((property, index) => {
     prompt += `\n## PROPERTY ${index + 1}\n\n`;
-    prompt += `**Title**: ${property.title || 'N/A'}\n`;
-    prompt += `**URL**: ${property.url}\n`;
+    const titleText = property.title ? property.title.trim() : '';
+    const url = property.url ? property.url.trim() : '';
+    const titleLine = url ? `[${titleText || `Property ${index + 1}`}](${url})` : (titleText || `Property ${index + 1}`);
+
+    prompt += `**Title**: ${titleLine}\n`;
+    prompt += `**URL**: ${url || 'N/A'}\n`;
     prompt += `**Overall Rating**: ${property.rating || 'N/A'} (${property.reviewCount || 0} reviews)\n\n`;
     
     if (property.error) {
