@@ -291,6 +291,40 @@ function scrollAndLoadAllReviews() {
       return false;
     };
 
+    const isScrollableElement = (element) => {
+      if (!element) {
+        return false;
+      }
+      const style = getComputedStyle(element);
+      const overflowY = style.overflowY;
+
+      if (element === document.body || element === document.documentElement) {
+        return element.scrollHeight > element.clientHeight + 20;
+      }
+
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        return element.scrollHeight > element.clientHeight + 20;
+      }
+
+      return false;
+    };
+
+    const findScrollableDescendant = (root) => {
+      if (!root) {
+        return null;
+      }
+      if (isScrollableElement(root)) {
+        return root;
+      }
+      const descendants = root.querySelectorAll('*');
+      for (const descendant of descendants) {
+        if (isScrollableElement(descendant)) {
+          return descendant;
+        }
+      }
+      return null;
+    };
+
     let scrollCount = 0;
     let consecutiveNoChange = 0;
     let scrollContainer = null;
@@ -308,19 +342,23 @@ function scrollAndLoadAllReviews() {
         document.querySelector('main'),
         document.querySelector('[style*="overflow-y"]'),
         document.querySelector('[style*="overflow: auto"]'),
-        document.body
+        document.body,
+        document.documentElement
       ];
 
       for (const candidate of candidates) {
-        if (candidate && candidate.scrollHeight > candidate.clientHeight) {
-          console.log('Found scrollable container:', candidate.tagName, candidate.className);
-          return candidate;
+        const scrollable = findScrollableDescendant(candidate);
+        if (scrollable) {
+          console.log('Found scrollable container:', scrollable.tagName, scrollable.className || scrollable.id || '');
+          return scrollable;
         }
       }
-      return document.scrollingElement || document.body;
+      const fallback = document.scrollingElement || document.body;
+      console.log('Falling back to scrolling element:', fallback.tagName || 'document');
+      return fallback;
     };
 
-    const scrollInterval = setInterval(() => {
+    const performScroll = () => {
       if (!scrollContainer || !document.contains(scrollContainer)) {
         scrollContainer = findScrollContainer();
         if (!scrollContainer) {
@@ -339,7 +377,7 @@ function scrollAndLoadAllReviews() {
       if (scrollContainer === document.body || scrollContainer === document.documentElement) {
         window.scrollTo(0, document.body.scrollHeight);
       } else if (typeof scrollContainer.scrollTo === 'function') {
-        scrollContainer.scrollTo(0, scrollContainer.scrollHeight);
+        scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'auto' });
       } else {
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
       }
@@ -387,12 +425,17 @@ function scrollAndLoadAllReviews() {
         lastUniqueReviewCount = newUniqueReviewCount;
 
         if (scrollCount >= 100 || consecutiveNoChange >= 10) {
-          clearInterval(scrollInterval);
           console.log(`Finished scrolling. Total unique reviews seen: ${newUniqueReviewCount}`);
           setTimeout(resolve, 4000);
         }
       }, 1500);
-    }, 1500);
+
+      if (scrollCount < 100 && consecutiveNoChange < 10) {
+        setTimeout(performScroll, 1500);
+      }
+    };
+
+    setTimeout(performScroll, 1000);
   });
 }
 
