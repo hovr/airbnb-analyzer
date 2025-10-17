@@ -36,7 +36,9 @@ async function extractAllProperties(propertyLinks) {
   await chrome.storage.local.set({ 
     extractionInProgress: true,
     currentProperty: 0,
-    totalProperties: propertyLinks.length
+    totalProperties: propertyLinks.length,
+    lastExtractionTotal: 0,
+    analysisPrompt: null
   });
 
   // Process properties in batches
@@ -95,7 +97,8 @@ async function extractAllProperties(propertyLinks) {
     analysisPrompt: prompt,
     extractionInProgress: false,
     currentProperty: 0,
-    totalProperties: 0
+    totalProperties: 0,
+    lastExtractionTotal: propertyLinks.length
   });
 
   // Send completion message

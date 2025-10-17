@@ -15,6 +15,26 @@ const safeSendRuntimeMessage = (payload) => {
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'getWishlistInfo') {
+    const propertyLinks = getPropertyLinks();
+    chrome.storage.local.set({ propertyCount: propertyLinks.length });
+    sendResponse({
+      status: 'ok',
+      propertyCount: propertyLinks.length,
+      extractionInProgress
+    });
+    return false;
+  }
+
+  if (message.action === 'complete' || message.action === 'error') {
+    extractionInProgress = false;
+    return false;
+  }
+
+  if (message.action === 'progress') {
+    return false;
+  }
+
   if (message.action === 'startExtraction' && !extractionInProgress) {
     extractionInProgress = true;
     
@@ -31,8 +51,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    // Store property count
-    chrome.storage.local.set({ propertyCount: propertyLinks.length });
+    // Store property count and clear previous analysis
+    chrome.storage.local.set({
+      propertyCount: propertyLinks.length,
+      analysisPrompt: null,
+      lastExtractionTotal: 0
+    });
     
     // Send links to background script to handle extraction
     safeSendRuntimeMessage({
@@ -41,8 +65,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     
     sendResponse({ status: 'started' });
+    return true;
   }
-  return true;
+  return false;
 });
 
 // Get all property links and titles from the wishlist

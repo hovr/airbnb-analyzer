@@ -4,45 +4,88 @@ document.addEventListener('DOMContentLoaded', async () => {
   const status = document.getElementById('status');
   const propertyCount = document.getElementById('propertyCount');
 
-  // Check if we're on a wishlist page
+  const resetStatus = () => {
+    status.textContent = '';
+    status.className = '';
+    copyBtn.style.display = 'none';
+  };
+
+  resetStatus();
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  
-  if (!tab.url.includes('/wishlists/')) {
+
+  if (!tab?.url?.includes('/wishlists/')) {
     status.textContent = 'Please navigate to an Airbnb wishlist page first.';
     status.className = 'error';
     startBtn.disabled = true;
     return;
   }
 
-  // Check if extraction is already in progress
-  const state = await chrome.storage.local.get(['extractionInProgress', 'currentProperty', 'totalProperties', 'propertyCount', 'analysisPrompt']);
-  
+  const state = await chrome.storage.local.get([
+    'extractionInProgress',
+    'currentProperty',
+    'totalProperties',
+    'propertyCount',
+    'analysisPrompt',
+    'lastExtractionTotal'
+  ]);
+
+  const updatePropertyCountDisplay = (count) => {
+    if (typeof count === 'number') {
+      propertyCount.textContent = `Found ${count} properties in wishlist`;
+    } else {
+      propertyCount.textContent = '';
+    }
+  };
+
+  const updateCompletionState = (totalProcessed) => {
+    if (typeof totalProcessed !== 'number' || totalProcessed <= 0) {
+      return;
+    }
+    status.textContent = `Analysis complete! Processed ${totalProcessed} properties.`;
+    status.className = 'success';
+    copyBtn.style.display = 'block';
+  };
+
   if (state.extractionInProgress) {
-    // Show current progress
     startBtn.disabled = true;
     status.innerHTML = `Processing property ${state.currentProperty} of ${state.totalProperties}...`;
     status.className = 'info progress';
-  } else if (state.analysisPrompt) {
-    // Analysis is complete, show copy button
-    status.textContent = `Analysis complete! Processed ${state.totalProperties} properties.`;
-    status.className = 'success';
-    copyBtn.style.display = 'block';
+  } else if (state.analysisPrompt && state.lastExtractionTotal > 0) {
+    updateCompletionState(state.lastExtractionTotal);
   }
-  
-  // Get property count from storage if available
-  if (state.propertyCount) {
-    propertyCount.textContent = `Found ${state.propertyCount} properties in wishlist`;
+
+  if (typeof state.propertyCount === 'number') {
+    updatePropertyCountDisplay(state.propertyCount);
   }
+
+  const refreshWishlistInfo = async () => {
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(tab.id, { action: 'getWishlistInfo' }, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve(null);
+          return;
+        }
+        if (response && response.status === 'ok') {
+          updatePropertyCountDisplay(response.propertyCount);
+          resolve(response);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  };
+
+  await refreshWishlistInfo();
 
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
+    resetStatus();
     status.textContent = 'Starting analysis...';
     status.className = 'info';
-    copyBtn.style.display = 'none';
 
     try {
-      // Send message to content script to start extraction
-      chrome.tabs.sendMessage(tab.id, { action: 'startExtraction' }, (response) => {
+      chrome.tabs.sendMessage(tab.id, { action: 'startExtraction' }, () => {
         if (chrome.runtime.lastError) {
           status.textContent = 'Error: ' + chrome.runtime.lastError.message;
           status.className = 'error';
@@ -50,18 +93,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       });
 
-      // Listen for progress updates
       chrome.runtime.onMessage.addListener(function listener(message) {
         if (message.action === 'progress') {
-          // message.current can now be a string like "10, 11, 12" or just a number
           status.innerHTML = `Processing properties ${message.current} of ${message.total}...`;
           status.className = 'info progress';
         } else if (message.action === 'complete') {
-          status.textContent = `Analysis complete! Processed ${message.total} properties.`;
-          status.className = 'success';
-          copyBtn.style.display = 'block';
+          updateCompletionState(message.total);
           startBtn.disabled = false;
           chrome.runtime.onMessage.removeListener(listener);
+          refreshWishlistInfo();
         } else if (message.action === 'error') {
           status.textContent = 'Error: ' + message.error;
           status.className = 'error';
