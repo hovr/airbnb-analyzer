@@ -14,6 +14,38 @@ async function resetExtractionState() {
 chrome.runtime.onStartup.addListener(() => {
   resetExtractionState();
 });
+
+const MIN_STAGGER_DELAY_MS = 800;
+const STAGGER_DELAY_JITTER_MS = 1200;
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const focusTab = async (tabId, focusWindow = false) => {
+  if (!tabId) {
+    return;
+  }
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (focusWindow) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    await chrome.tabs.update(tabId, { active: true });
+  } catch (error) {
+    console.debug('focusTab failed', error);
+  }
+};
+
+const restoreOriginFocus = async (originContext) => {
+  if (!originContext || !originContext.tabId) {
+    return;
+  }
+  try {
+    await chrome.windows.update(originContext.windowId, { focused: true });
+    await chrome.tabs.update(originContext.tabId, { active: true });
+  } catch (error) {
+    console.debug('restoreOriginFocus failed', error);
+  }
+};
 // Background service worker to handle tab operations and data extraction
 
 const safeSendRuntimeMessage = (payload) => {
@@ -64,6 +96,8 @@ async function extractAllProperties(propertyLinks) {
   let nextIndex = 0;
   let completed = 0;
 
+  let originContext = null;
+
   const results = new Array(propertyLinks.length);
   const activeIndices = new Set();
   await chrome.storage.local.set({
@@ -106,6 +140,29 @@ async function extractAllProperties(propertyLinks) {
     await chrome.storage.local.set({ currentProperty: currentIndex + 1 });
 
     try {
+      if (!originContext) {
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (activeTab) {
+            originContext = {
+              tabId: activeTab.id,
+              windowId: activeTab.windowId
+            };
+          }
+        } catch (error) {
+          console.debug('Failed to capture origin context', error);
+        }
+      }
+
+      const originTabId = originContext ? originContext.tabId : null;
+      if (originTabId) {
+        await focusTab(originTabId, true);
+        await sleep(250);
+      }
+
+      const staggerDelay = MIN_STAGGER_DELAY_MS + Math.random() * STAGGER_DELAY_JITTER_MS;
+      await sleep(staggerDelay);
+
       const data = await extractPropertyData(
         linkData.url,
         linkData.title,
@@ -149,6 +206,10 @@ async function extractAllProperties(propertyLinks) {
         total: propertyLinks.length,
         propertyName: 'Finalizing results'
       });
+
+      if (originContext) {
+        await restoreOriginFocus(originContext);
+      }
     }
   };
 
