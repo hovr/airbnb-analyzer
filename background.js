@@ -262,8 +262,9 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
   const propertyId = url.match(/\/rooms\/(\d+)/)?.[1];
   
   // First, open the main property page to get details
-  const mainTab = await chrome.tabs.create({ url: url, active: false });
-  await sleep(3000);
+  const mainTab = await chrome.tabs.create({ url: url, active: true });
+  await focusTab(mainTab.id, true);
+  await sleep(3500);
   
   try {
     // Extract basic info from main page
@@ -281,8 +282,9 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
     // Now open reviews page if there are reviews
     if (propertyData.reviewCount && propertyData.reviewCount !== '0') {
       const reviewsUrl = `https://www.airbnb.co.uk/rooms/${propertyId}/reviews`;
-      const reviewsTab = await chrome.tabs.create({ url: reviewsUrl, active: false });
-      await sleep(4000); // Wait longer for initial load
+      const reviewsTab = await chrome.tabs.create({ url: reviewsUrl, active: true });
+      await focusTab(reviewsTab.id, true);
+      await sleep(4200); // Wait longer for initial load
       
       try {
         // Scroll to load ALL reviews
