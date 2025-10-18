@@ -30,9 +30,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function extractAllProperties(propertyLinks) {
   const propertiesData = [];
-  const BATCH_SIZE = 3; // Process 3 properties at a time
-  
-  // Store initial state
+  const CONCURRENCY_LIMIT = 5;
+
   await chrome.storage.local.set({ 
     extractionInProgress: true,
     currentProperty: 0,
@@ -41,53 +40,74 @@ async function extractAllProperties(propertyLinks) {
     analysisPrompt: null
   });
 
-  // Process properties in batches
-  for (let i = 0; i < propertyLinks.length; i += BATCH_SIZE) {
-    const batch = propertyLinks.slice(i, i + BATCH_SIZE);
-    
-    // Build the progress message for this batch
-    const batchNumbers = batch.map((_, idx) => i + idx + 1);
-    const batchMessage = batchNumbers.join(', ');
-    
-    // Send progress update showing all properties in current batch
+  let nextIndex = 0;
+  let completed = 0;
+
+  const results = new Array(propertyLinks.length);
+  const activeIndices = new Set();
+
+  const buildProgressList = () => {
+    const sorted = Array.from(activeIndices).sort((a, b) => a - b);
+    if (!sorted.length) {
+      return `${Math.min(completed + 1, propertyLinks.length)}`;
+    }
+    return sorted.map(idx => idx + 1).join(', ');
+  };
+
+  const launchNext = async () => {
+    if (nextIndex >= propertyLinks.length) {
+      return;
+    }
+
+    const currentIndex = nextIndex;
+    nextIndex += 1;
+
+    const linkData = propertyLinks[currentIndex];
+    activeIndices.add(currentIndex);
+
     safeSendRuntimeMessage({
       action: 'progress',
-      current: batchMessage,
+      current: buildProgressList(),
       total: propertyLinks.length,
-      propertyName: `Processing properties: ${batchMessage}`
+      propertyName: `Processing properties: ${buildProgressList()}`
     });
-    
-    // Process batch in parallel
-    const batchPromises = batch.map(async (linkData, batchIndex) => {
-      const actualIndex = i + batchIndex;
-      const url = linkData.url;
-      const title = linkData.title;
-      
-      // Update current property index
-      await chrome.storage.local.set({ currentProperty: actualIndex + 1 });
 
-      try {
-        const data = await extractPropertyData(url, title, linkData.rating, linkData.reviewCount);
-        return data;
-      } catch (error) {
-        console.error(`Error extracting ${url}:`, error);
-        return {
-          url: url,
-          title: title,
-          error: 'Failed to extract data: ' + error.message
-        };
+    await chrome.storage.local.set({ currentProperty: currentIndex + 1 });
+
+    try {
+      const data = await extractPropertyData(linkData.url, linkData.title, linkData.rating, linkData.reviewCount);
+      results[currentIndex] = data;
+    } catch (error) {
+      console.error(`Error extracting ${linkData.url}:`, error);
+      results[currentIndex] = {
+        url: linkData.url,
+        title: linkData.title,
+        error: 'Failed to extract data: ' + error.message
+      };
+    } finally {
+      activeIndices.delete(currentIndex);
+      completed += 1;
+
+      if (completed < propertyLinks.length) {
+        safeSendRuntimeMessage({
+          action: 'progress',
+          current: buildProgressList(),
+          total: propertyLinks.length,
+          propertyName: `Processing properties: ${buildProgressList()}`
+        });
+        await launchNext();
       }
-    });
-
-    // Wait for all properties in the batch to complete
-    const batchResults = await Promise.all(batchPromises);
-    propertiesData.push(...batchResults);
-    
-    // Small delay between batches
-    if (i + BATCH_SIZE < propertyLinks.length) {
-      await sleep(1000);
     }
+  };
+
+  const starters = Math.min(CONCURRENCY_LIMIT, propertyLinks.length);
+  const running = [];
+  for (let i = 0; i < starters; i += 1) {
+    running.push(launchNext());
   }
+
+  await Promise.all(running);
+  propertiesData.push(...results.filter(Boolean));
 
   // Generate the LLM prompt
   const prompt = generateLLMPrompt(propertiesData);
