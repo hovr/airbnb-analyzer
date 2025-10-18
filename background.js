@@ -81,7 +81,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function extractAllProperties(propertyLinks) {
   const propertiesData = [];
-  const CONCURRENCY_LIMIT = 5;
+  const CONCURRENCY_LIMIT = 2;
 
   await chrome.storage.local.set({ 
     extractionInProgress: true,
@@ -828,6 +828,18 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
       let recovered = false;
       for (let attempt = 0; attempt < 3 && !recovered; attempt += 1) {
         recovered = await attemptRecovery(attempt);
+        if (!recovered) {
+          try {
+            const dialog = document.querySelector('[role="dialog"]');
+            const scrollable = dialog || document.scrollingElement || document.body;
+            if (scrollable) {
+              scrollable.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }
+          } catch (error) {
+            console.debug('Failed to scroll into view during recovery', error);
+          }
+          await wait(400);
+        }
       }
       anyMoved = recovered;
     }
