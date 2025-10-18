@@ -252,11 +252,21 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
         document.querySelector('[data-testid="rating-section"]')
       ];
 
+      let resolvedFromButtons = false;
       for (const node of reviewButtons) {
-        if (!node) continue;
-        const combinedText = `${node.textContent || ''} ${node.getAttribute('aria-label') || ''}`;
-        if (applyReviewCount(combinedText)) {
-          break;
+        if (!node || resolvedFromButtons) continue;
+        const candidates = [
+          node.textContent,
+          node.getAttribute('aria-label'),
+          node.getAttribute('title')
+        ];
+
+        for (const candidate of candidates) {
+          if (!candidate) continue;
+          if (applyReviewCount(candidate)) {
+            resolvedFromButtons = true;
+            break;
+          }
         }
       }
     }
@@ -358,6 +368,37 @@ async function scrollAndLoadAllReviews(expectedTotal) {
     return result;
   };
 
+  const readTotalBadge = () => {
+    const variants = [
+      '[data-testid="reviews-tab"][aria-controls] span:not(:empty)',
+      '[data-testid="reviews-tab-panel"] h2 span:not(:empty)',
+      '[data-testid="reviews-tab-panel"] button[data-testid="pdp-show-all-reviews-button"] span:not(:empty)',
+      '[data-testid="reviews-tab"] button[data-testid="pdp-show-all-reviews-button"] span:not(:empty)',
+      'button[data-testid="pdp-show-all-reviews-button"] span:not(:empty)'
+    ];
+
+    for (const selector of variants) {
+      const node = document.querySelector(selector);
+      if (!node || node.childElementCount > 0) {
+        continue;
+      }
+      const { textContent = '' } = node;
+      if (!textContent) {
+        continue;
+      }
+      const normalised = textContent.replace(/[^0-9]/g, '');
+      if (!normalised) {
+        continue;
+      }
+      const parsed = Number.parseInt(normalised, 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+
+    return null;
+  };
+
   const dialogReady = () => {
     const container = document.querySelector('[role="dialog"] div._17itzz4');
     if (container) {
@@ -374,6 +415,16 @@ async function scrollAndLoadAllReviews(expectedTotal) {
         const text = (node.textContent || node.getAttribute('aria-label') || '').trim();
         console.log('Clicking reviews control', text);
         node.click();
+        if (!expected) {
+          try {
+            const badgeCount = readTotalBadge();
+            if (Number.isFinite(badgeCount) && badgeCount > 0) {
+              expected = badgeCount;
+            }
+          } catch (error) {
+            console.warn('Failed to read reviews badge after click', error);
+          }
+        }
         return true;
       }
     }
@@ -413,7 +464,17 @@ async function scrollAndLoadAllReviews(expectedTotal) {
   };
 
   const seenReviewIds = new Set();
-  const expected = Number.isFinite(expectedTotal) && expectedTotal > 0 ? expectedTotal : null;
+  let expected = Number.isFinite(expectedTotal) && expectedTotal > 0 ? expectedTotal : null;
+  if (!expected) {
+    try {
+      const badgeCount = readTotalBadge();
+      if (Number.isFinite(badgeCount) && badgeCount > 0) {
+        expected = badgeCount;
+      }
+    } catch (error) {
+      console.warn('Failed to read reviews badge', error);
+    }
+  }
 
   const collectReviews = () => {
     const reviewNodes = document.querySelectorAll('[data-review-id]');
@@ -520,6 +581,13 @@ async function scrollAndLoadAllReviews(expectedTotal) {
     targets.forEach(scrollElement);
     const clicked = tryClickLoadMore();
     await wait(clicked ? 2200 : 1200);
+
+    if (!expected || !Number.isFinite(expected)) {
+      const badgeCount = readTotalBadge();
+      if (Number.isFinite(badgeCount) && badgeCount > 0) {
+        expected = badgeCount;
+      }
+    }
 
     const currentCount = collectReviews();
     console.log(`Cycle ${cycle}: seen ${currentCount} reviews (expected ${expected || 'unknown'})`);
