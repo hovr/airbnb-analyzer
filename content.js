@@ -68,7 +68,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         extractionInProgress: true,
         propertyCount: propertyLinks.length,
         analysisPrompt: null,
-        lastExtractionTotal: 0
+        lastExtractionTotal: 0,
+        activePropertyIndices: [],
+        completedPropertyCount: 0
       }, () => {
         safeSendRuntimeMessage({
           action: 'extractProperties',

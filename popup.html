@@ -57,6 +57,18 @@
       font-size: 14px;
       color: #484848;
     }
+    #resetLink {
+      margin-top: 12px;
+      font-size: 12px;
+      text-align: center;
+    }
+    #resetLink a {
+      color: #1976D2;
+      text-decoration: none;
+    }
+    #resetLink a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -65,6 +77,9 @@
   <button id="startBtn">Start Analysis</button>
   <button id="copyBtn" style="display:none;">Copy Prompt</button>
   <div id="status"></div>
+  <div id="resetLink" style="margin-top:12px; font-size:12px; text-align:center;">
+    <a href="#" id="resetState">Reset analyzer state</a>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

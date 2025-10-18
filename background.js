@@ -1,3 +1,19 @@
+async function resetExtractionState() {
+  await chrome.storage.local.set({
+    extractionInProgress: false,
+    currentProperty: 0,
+    totalProperties: 0,
+    lastExtractionTotal: 0,
+    analysisPrompt: null,
+    propertyCount: 0,
+    activePropertyIndices: [],
+    completedPropertyCount: 0
+  });
+}
+
+chrome.runtime.onStartup.addListener(() => {
+  resetExtractionState();
+});
 // Background service worker to handle tab operations and data extraction
 
 const safeSendRuntimeMessage = (payload) => {
@@ -18,6 +34,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Start the extraction process
     extractAllProperties(message.propertyLinks);
     sendResponse({ status: 'started' });
+    return true;
+  }
+
+  if (message.action === 'resetExtractionState') {
+    resetExtractionState().then(() => sendResponse({ status: 'reset' }));
     return true;
   }
 
@@ -45,6 +66,10 @@ async function extractAllProperties(propertyLinks) {
 
   const results = new Array(propertyLinks.length);
   const activeIndices = new Set();
+  await chrome.storage.local.set({
+    activePropertyIndices: [],
+    completedPropertyCount: 0
+  });
 
   const buildProgressList = () => {
     const sorted = Array.from(activeIndices).sort((a, b) => a - b);
@@ -64,12 +89,18 @@ async function extractAllProperties(propertyLinks) {
 
     const linkData = propertyLinks[currentIndex];
     activeIndices.add(currentIndex);
+    const progressList = buildProgressList();
+
+    chrome.storage.local.set({
+      activePropertyIndices: Array.from(activeIndices).map(idx => idx + 1).sort((a, b) => a - b),
+      completedPropertyCount: completed
+    });
 
     safeSendRuntimeMessage({
       action: 'progress',
-      current: buildProgressList(),
+      current: progressList,
       total: propertyLinks.length,
-      propertyName: `Processing properties: ${buildProgressList()}`
+      propertyName: `Processing properties: ${progressList}`
     });
 
     await chrome.storage.local.set({ currentProperty: currentIndex + 1 });
@@ -88,15 +119,29 @@ async function extractAllProperties(propertyLinks) {
       activeIndices.delete(currentIndex);
       completed += 1;
 
+      const updatedList = buildProgressList();
+      chrome.storage.local.set({
+        activePropertyIndices: Array.from(activeIndices).map(idx => idx + 1).sort((a, b) => a - b),
+        completedPropertyCount: completed
+      });
+      safeSendRuntimeMessage({
+        action: 'progress',
+        current: updatedList,
+        total: propertyLinks.length,
+        propertyName: updatedList ? `Processing properties: ${updatedList}` : 'Finalizing results'
+      });
+
       if (completed < propertyLinks.length) {
-        safeSendRuntimeMessage({
-          action: 'progress',
-          current: buildProgressList(),
-          total: propertyLinks.length,
-          propertyName: `Processing properties: ${buildProgressList()}`
-        });
         await launchNext();
+        return;
       }
+
+      safeSendRuntimeMessage({
+        action: 'progress',
+        current: `${propertyLinks.length}`,
+        total: propertyLinks.length,
+        propertyName: 'Finalizing results'
+      });
     }
   };
 
@@ -106,7 +151,26 @@ async function extractAllProperties(propertyLinks) {
     running.push(launchNext());
   }
 
-  await Promise.all(running);
+  try {
+    await Promise.all(running);
+  } finally {
+    const missingIndices = [];
+    results.forEach((value, idx) => {
+      if (!value) {
+        missingIndices.push(idx + 1);
+        results[idx] = {
+          url: propertyLinks[idx]?.url || 'unknown',
+          title: propertyLinks[idx]?.title || `Property ${idx + 1}`,
+          error: 'Extraction did not complete (timeout or user interruption).'
+        };
+      }
+    });
+
+    if (missingIndices.length) {
+      console.warn('Extraction finished with incomplete entries', missingIndices);
+    }
+  }
+
   propertiesData.push(...results.filter(Boolean));
 
   // Generate the LLM prompt
@@ -564,7 +628,7 @@ async function scrollAndLoadAllReviews(expectedTotal) {
     return dedupe(targets.filter(Boolean));
   };
 
-  const scrollElement = (element) => {
+  const scrollElement = (element, direction = 1) => {
     const snapshotPosition = () => {
       if (!element) {
         return 0;
@@ -581,12 +645,20 @@ async function scrollAndLoadAllReviews(expectedTotal) {
       if (!element) {
         return;
       }
+      const deltaFactor = Math.max(0.2, Math.min(1, Math.abs(direction))) * Math.sign(direction || 1);
+      const deltaWindow = deltaFactor * Math.max(600, window.innerHeight || 800);
       if (element === window || element === document.body || element === document.documentElement) {
-        window.scrollBy(0, Math.max(600, window.innerHeight || 800));
+        window.scrollBy(0, deltaWindow);
       } else if (typeof element.scrollBy === 'function') {
-        element.scrollBy({ top: element.clientHeight * 0.9, behavior: 'auto' });
+        element.scrollBy({ top: deltaFactor * element.clientHeight * 0.9, behavior: 'auto' });
       } else if (typeof element.scrollTop === 'number') {
-        element.scrollTop = Math.min(element.scrollTop + element.clientHeight * 0.9, element.scrollHeight);
+        const delta = deltaFactor * element.clientHeight * 0.9;
+        const next = element.scrollTop + delta;
+        if (delta >= 0) {
+          element.scrollTop = Math.min(next, element.scrollHeight);
+        } else {
+          element.scrollTop = Math.max(0, next);
+        }
       }
       element.dispatchEvent(new Event('scroll', { bubbles: true }));
     };
@@ -600,7 +672,7 @@ async function scrollAndLoadAllReviews(expectedTotal) {
   };
 
   const ensureMovementOrRetry = async (element) => {
-    const initial = scrollElement(element);
+    const initial = scrollElement(element, 1);
     if (initial && initial.moved) {
       return true;
     }
@@ -610,7 +682,7 @@ async function scrollAndLoadAllReviews(expectedTotal) {
     }
 
     await wait(400);
-    const retry = scrollElement(element);
+    const retry = scrollElement(element, 1);
     return Boolean(retry && retry.moved);
   };
 
@@ -654,8 +726,17 @@ async function scrollAndLoadAllReviews(expectedTotal) {
       continue;
     }
 
-    const movementResults = await Promise.all(targets.map(ensureMovementOrRetry));
-    const anyMoved = movementResults.some(Boolean);
+    const movementAttempts = await Promise.all(targets.map(ensureMovementOrRetry));
+    let anyMoved = movementAttempts.some(Boolean);
+
+    if (!anyMoved) {
+      for (const target of targets) {
+        scrollElement(target, -0.4);
+      }
+      await wait(700);
+      const downMoves = await Promise.all(targets.map(el => ensureMovementOrRetry(el)));
+      anyMoved = downMoves.some(Boolean);
+    }
     const clicked = tryClickLoadMore();
 
     if (clicked) {

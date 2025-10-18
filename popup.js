@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const copyBtn = document.getElementById('copyBtn');
   const status = document.getElementById('status');
   const propertyCount = document.getElementById('propertyCount');
+  const resetLink = document.getElementById('resetState');
 
   const resetStatus = () => {
     status.textContent = '';
@@ -27,7 +28,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     'totalProperties',
     'propertyCount',
     'analysisPrompt',
-    'lastExtractionTotal'
+    'lastExtractionTotal',
+    'activePropertyIndices',
+    'completedPropertyCount'
   ]);
 
   const updatePropertyCountDisplay = (count) => {
@@ -47,9 +50,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     copyBtn.style.display = 'block';
   };
 
+  const formatActiveList = (completed, activeList, total) => {
+    if (activeList && activeList.length) {
+      const text = activeList.join(', ');
+      return `${text} of ${total}`;
+    }
+    if (total) {
+      const next = Math.min(completed + 1, total);
+      return `${next} of ${total}`;
+    }
+    return '';
+  };
+
   if (state.extractionInProgress) {
     startBtn.disabled = true;
-    status.innerHTML = `Processing property ${state.currentProperty} of ${state.totalProperties}...`;
+    const activeText = formatActiveList(state.completedPropertyCount || 0, state.activePropertyIndices || [], state.totalProperties || state.propertyCount || 0);
+    if (activeText) {
+      status.innerHTML = `Processing properties ${activeText}...`;
+    } else {
+      status.innerHTML = `Processing properties...`;
+    }
     status.className = 'info progress';
   } else if (state.analysisPrompt && state.lastExtractionTotal > 0) {
     updateCompletionState(state.lastExtractionTotal);
@@ -106,7 +126,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       chrome.runtime.onMessage.addListener(function listener(message) {
         if (message.action === 'progress') {
-          status.innerHTML = `Processing properties ${message.current} of ${message.total}...`;
+          const infoText = message.current ? `Processing properties ${message.current} of ${message.total}...` : `Processing properties...`;
+          status.innerHTML = infoText;
           status.className = 'info progress';
         } else if (message.action === 'complete') {
           updateCompletionState(message.total);
@@ -139,6 +160,41 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } catch (error) {
       status.textContent = 'Error copying: ' + error.message;
+      status.className = 'error';
+    }
+  });
+
+  resetLink.addEventListener('click', async (event) => {
+    event.preventDefault();
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ action: 'resetExtractionState' }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (response && response.status === 'reset') {
+            resolve();
+          } else {
+            reject(new Error('Failed to reset state'));
+          }
+        });
+      });
+
+      await chrome.storage.local.set({
+        extractionInProgress: false,
+        currentProperty: 0,
+        totalProperties: 0,
+        lastExtractionTotal: 0,
+        analysisPrompt: null
+      });
+
+      startBtn.disabled = false;
+      resetStatus();
+      status.textContent = 'Analyzer state reset.';
+      status.className = 'info';
+    } catch (error) {
+      status.textContent = 'Error resetting: ' + error.message;
       status.className = 'error';
     }
   });
