@@ -81,7 +81,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function extractAllProperties(propertyLinks) {
   const propertiesData = [];
-  const CONCURRENCY_LIMIT = 2;
+  const CONCURRENCY_LIMIT = 1;
 
   await chrome.storage.local.set({ 
     extractionInProgress: true,
