@@ -106,7 +106,14 @@ async function extractAllProperties(propertyLinks) {
     await chrome.storage.local.set({ currentProperty: currentIndex + 1 });
 
     try {
-      const data = await extractPropertyData(linkData.url, linkData.title, linkData.rating, linkData.reviewCount);
+      const data = await extractPropertyData(
+        linkData.url,
+        linkData.title,
+        linkData.rating,
+        linkData.reviewCount,
+        currentIndex,
+        propertyLinks.length
+      );
       results[currentIndex] = data;
     } catch (error) {
       console.error(`Error extracting ${linkData.url}:`, error);
@@ -192,7 +199,7 @@ async function extractAllProperties(propertyLinks) {
   });
 }
 
-async function extractPropertyData(url, title, wishlistRating, wishlistReviewCount) {
+async function extractPropertyData(url, title, wishlistRating, wishlistReviewCount, positionIndex, totalCount) {
   const propertyId = url.match(/\/rooms\/(\d+)/)?.[1];
   
   // First, open the main property page to get details
@@ -223,7 +230,7 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
         const scrollResult = await chrome.scripting.executeScript({
           target: { tabId: reviewsTab.id },
           func: scrollAndLoadAllReviews,
-          args: [Number.parseInt(propertyData.reviewCount, 10) || null]
+          args: [Number.parseInt(propertyData.reviewCount, 10) || null, positionIndex + 1, totalCount]
         });
         
         const finalLoadedCount = scrollResult && scrollResult[0] ? scrollResult[0].result : null;
@@ -461,7 +468,7 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
 }
 
 // Scroll aggressively to load ALL reviews
-async function scrollAndLoadAllReviews(expectedTotal) {
+async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, totalProperties = null) {
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   const dedupe = (elements) => {
@@ -583,6 +590,20 @@ async function scrollAndLoadAllReviews(expectedTotal) {
       console.warn('Failed to read reviews badge', error);
     }
   }
+
+  const updateTitle = (count, suffixText) => {
+    if (!propertyNumber) {
+      return;
+    }
+    const totalLabel = expected ? expected : '?';
+    const suffix = suffixText || 'reviews processed';
+    const titlePrefix = totalProperties ? `#${propertyNumber}/${totalProperties}` : `#${propertyNumber}`;
+    try {
+      document.title = `${titlePrefix} ${count}/${totalLabel} ${suffix}`;
+    } catch (error) {
+      console.warn('Failed to update document title', error);
+    }
+  };
 
   const collectReviews = () => {
     const reviewNodes = document.querySelectorAll('[data-review-id]');
@@ -753,6 +774,7 @@ async function scrollAndLoadAllReviews(expectedTotal) {
     }
 
     const currentCount = collectReviews();
+    updateTitle(currentCount, 'reviews processed');
     console.log(`Cycle ${cycle}: seen ${currentCount} reviews (expected ${expected || 'unknown'})`);
 
     if (expected && currentCount >= expected) {
@@ -772,6 +794,7 @@ async function scrollAndLoadAllReviews(expectedTotal) {
   }
 
   const finalCount = collectReviews();
+  updateTitle(finalCount, 'reviews processed (complete)');
   if (expected && finalCount < expected) {
     console.warn('Failed to reach expected reviews', { expected, finalCount });
   } else {
