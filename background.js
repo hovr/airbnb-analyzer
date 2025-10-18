@@ -18,8 +18,6 @@ chrome.runtime.onStartup.addListener(() => {
 const MIN_STAGGER_DELAY_MS = 800;
 const STAGGER_DELAY_JITTER_MS = 1200;
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 const focusTab = async (tabId, focusWindow = false) => {
   if (!tabId) {
     return;
