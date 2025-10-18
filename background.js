@@ -521,11 +521,23 @@ async function scrollAndLoadAllReviews(expectedTotal) {
   };
 
   const scrollElement = (element) => {
-    try {
+    const snapshotPosition = () => {
+      if (!element) {
+        return 0;
+      }
+
+      if (element === window || element === document.body || element === document.documentElement) {
+        return window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+      }
+
+      return typeof element.scrollTop === 'number' ? element.scrollTop : 0;
+    };
+
+    const performScroll = () => {
       if (!element) {
         return;
       }
-      if (element === document.body || element === document.documentElement) {
+      if (element === window || element === document.body || element === document.documentElement) {
         window.scrollBy(0, Math.max(600, window.innerHeight || 800));
       } else if (typeof element.scrollBy === 'function') {
         element.scrollBy({ top: element.clientHeight * 0.9, behavior: 'auto' });
@@ -533,9 +545,29 @@ async function scrollAndLoadAllReviews(expectedTotal) {
         element.scrollTop = Math.min(element.scrollTop + element.clientHeight * 0.9, element.scrollHeight);
       }
       element.dispatchEvent(new Event('scroll', { bubbles: true }));
-    } catch (error) {
-      console.warn('Failed to scroll element', error);
+    };
+
+    const before = snapshotPosition();
+    performScroll();
+    const after = snapshotPosition();
+    const moved = after > before;
+
+    return { moved, after, before };
+  };
+
+  const ensureMovementOrRetry = async (element) => {
+    const initial = scrollElement(element);
+    if (initial && initial.moved) {
+      return true;
     }
+
+    if (!element) {
+      return false;
+    }
+
+    await wait(400);
+    const retry = scrollElement(element);
+    return Boolean(retry && retry.moved);
   };
 
   const tryClickLoadMore = () => {
@@ -578,9 +610,13 @@ async function scrollAndLoadAllReviews(expectedTotal) {
       continue;
     }
 
-    targets.forEach(scrollElement);
+    const movementResults = await Promise.all(targets.map(ensureMovementOrRetry));
+    const anyMoved = movementResults.some(Boolean);
+    if (!anyMoved && clicked) {
+      await wait(600);
+    }
     const clicked = tryClickLoadMore();
-    await wait(clicked ? 2200 : 1200);
+    await wait(clicked ? 2400 : 1400);
 
     if (!expected || !Number.isFinite(expected)) {
       const badgeCount = readTotalBadge();
@@ -597,7 +633,7 @@ async function scrollAndLoadAllReviews(expectedTotal) {
       break;
     }
 
-    if (currentCount > lastCount) {
+    if (currentCount > lastCount || anyMoved) {
       idleCycles = 0;
       lastCount = currentCount;
     } else {
