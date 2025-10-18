@@ -636,11 +636,13 @@ async function scrollAndLoadAllReviews(expectedTotal) {
 
     const movementResults = await Promise.all(targets.map(ensureMovementOrRetry));
     const anyMoved = movementResults.some(Boolean);
-    if (!anyMoved && clicked) {
-      await wait(600);
-    }
     const clicked = tryClickLoadMore();
-    await wait(clicked ? 2400 : 1400);
+
+    if (clicked) {
+      await wait(anyMoved ? 400 : 2400);
+    } else {
+      await wait(anyMoved ? 100 : 600);
+    }
 
     if (!expected || !Number.isFinite(expected)) {
       const badgeCount = readTotalBadge();
