@@ -108,16 +108,43 @@ function getPropertyLinks() {
           textCandidates.unshift(ariaReviewNode.getAttribute('aria-label'));
         }
 
-        for (const source of textCandidates) {
-        if (!source) {
-          continue;
-        }
-          if (!rating) {
-            const ratingMatch = source.match(/\b([0-5](?:\.\d{1,2})?)\b(?=\s*(?:out of|[·(]))/i);
-            if (ratingMatch) {
-              rating = ratingMatch[1];
+        const parseRatingFromText = (source) => {
+          if (!source) {
+            return null;
+          }
+
+          const patterns = [
+            /Rated\s*([0-5](?:\.\d{1,2})?)/i,
+            /([0-5](?:\.\d{1,2})?)\s*[·,]\s*(?:\d{1,4}(?:,\d{3})*)\s+reviews?/i,
+            /([0-5](?:\.\d{1,2})?)\s*out of\s*5/i,
+            /([0-5](?:\.\d{1,2})?)\s*(?:stars?)/i
+          ];
+
+          for (const pattern of patterns) {
+            const match = source.match(pattern);
+            if (match) {
+              const value = Number.parseFloat(match[1]);
+              if (!Number.isNaN(value) && value > 0 && value <= 5) {
+                return match[1];
+              }
             }
           }
+
+          return null;
+        };
+
+        for (const source of textCandidates) {
+          if (!source) {
+            continue;
+          }
+
+          if (!rating) {
+            const parsedRating = parseRatingFromText(source);
+            if (parsedRating) {
+              rating = parsedRating;
+            }
+          }
+
           if (!reviewCount) {
             const reviewMatch = source.match(/\b(\d{1,4}(?:,\d{3})*)\b(?=\s*reviews?)/i);
             if (reviewMatch) {

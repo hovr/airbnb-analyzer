@@ -222,6 +222,33 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
     }
 
     // Only try to extract rating if we don't already have it from wishlist
+    const normalizeRating = (value) => {
+      if (!value && value !== 0) {
+        return null;
+      }
+      const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value).trim());
+      if (Number.isNaN(numeric) || numeric <= 0) {
+        return null;
+      }
+      if (numeric > 5.0) {
+        return null;
+      }
+      return numeric.toFixed(2).replace(/\.00$/, '');
+    };
+
+    const applyRating = (candidate) => {
+      const normalised = normalizeRating(candidate);
+      if (!normalised) {
+        return false;
+      }
+      data.rating = normalised;
+      return true;
+    };
+
+    if (!applyRating(data.rating)) {
+      data.rating = '';
+    }
+
     if (!data.rating) {
       console.log('Looking for rating on property page...');
       
@@ -232,11 +259,8 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
         const ratingText = ratingLink.textContent;
         const ratingMatch = ratingText.match(/([\d.]+)/);
         const reviewMatch = ratingText.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-        if (ratingMatch) {
-          const fallbackRating = parseFloat(ratingMatch[1]);
-          if (!Number.isNaN(fallbackRating) && fallbackRating > 0 && fallbackRating <= 5) {
-            data.rating = ratingMatch[1];
-          }
+        if (!data.rating && ratingMatch) {
+          applyRating(ratingMatch[1]);
         }
         if (reviewMatch) {
           applyReviewCount(reviewMatch[1]);
