@@ -1,0 +1,57 @@
+# Airbnb Wishlist Analyzer
+
+Airbnb Wishlist Analyzer is a Chrome extension that gathers details and reviews from the properties saved in your Airbnb wishlist. It scrolls each property’s review list, pulls the useful information into a single prompt, and makes it easy to feed that prompt into an AI assistant for deeper analysis.
+
+## What you need before starting
+
+- A computer with Google Chrome installed.
+- An Airbnb account with at least one saved wishlist.
+- The extension files from this repository (downloaded to a folder on your computer).
+
+## Step-by-step installation (for non-technical users)
+
+1. **Download the extension files**
+   - Click the green `Code` button in GitHub and choose `Download ZIP`.
+   - When the download finishes, open the ZIP file and extract it to a folder you can find easily (for example, your Desktop).
+
+2. **Open Chrome’s extensions page**
+   - Open Google Chrome.
+   - In the address bar, type `chrome://extensions` and press Enter.
+
+3. **Turn on Developer Mode**
+   - On the extensions page, look for the toggle in the top-right corner labeled `Developer mode` and switch it on. New buttons will appear.
+
+4. **Load the extension**
+   - Click the `Load unpacked` button that appears after you enable Developer Mode.
+   - In the file picker window, select the folder that contains the extension files you extracted earlier (the folder should include files such as `manifest.json`, `background.js`, and `popup.html`).
+   - Click `Select Folder` (Windows) or `Open` (macOS).
+   - The extension should now appear in your list of extensions, typically with the name “Airbnb Wishlist Analyzer”.
+
+5. **Pin the extension icon (optional but helpful)**
+   - Click the puzzle-piece icon in Chrome’s toolbar (top-right).
+   - Find “Airbnb Wishlist Analyzer” in the list and click the pin icon next to it so the extension icon stays visible.
+
+## How to use the extension
+
+1. **Open your Airbnb wishlist**
+   - Visit `https://www.airbnb.com` (or `.co.uk`) and open the wishlist you want to analyze. Make sure all the properties you’re interested in are visible.
+
+2. **Start the analyzer**
+   - Click the Airbnb Wishlist Analyzer icon in the Chrome toolbar.
+   - The popup will show how many properties it found. Click the **Start Analysis** button.
+   - The extension will automatically open property tabs in the background, collect details, and scroll through reviews. This may take several minutes depending on how many properties you have.
+
+3. **Copy the analysis prompt**
+   - When the analysis is complete, the popup will display a success message and enable the **Copy Prompt** button.
+   - Click **Copy Prompt** to place the generated text on your clipboard. You can paste this into your preferred AI assistant (for example, ChatGPT) to get a summarized review analysis.
+
+4. **Re-run if needed**
+   - To re-run the analysis on the same or another wishlist, return to the wishlist page, open the extension popup again, and click **Start Analysis**.
+
+## Troubleshooting tips
+
+- **Extension not visible**: Make sure Developer Mode is still enabled on `chrome://extensions` and that the extension is toggled on.
+- **“Analysis already in progress” message**: Wait until the current run finishes, or refresh the wishlist page if you think the previous run got stuck.
+- **Airbnb pages not loading**: The extension works only on wishlist pages. Confirm the URL includes `/wishlists/`.
+
+If you run into other issues, double-check that you extracted the full ZIP and loaded the folder containing `manifest.json`. You can remove the extension from `chrome://extensions` and load it again at any time.
