@@ -233,9 +233,12 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
           args: [Number.parseInt(propertyData.reviewCount, 10) || null, positionIndex + 1, totalCount]
         });
         
-        const finalLoadedCount = scrollResult && scrollResult[0] ? scrollResult[0].result : null;
-        if (Number.isFinite(finalLoadedCount)) {
-          propertyData.loadedReviewCount = finalLoadedCount;
+        const scrollInfo = scrollResult && scrollResult[0] ? scrollResult[0].result : null;
+        if (scrollInfo && Number.isFinite(scrollInfo.count)) {
+          propertyData.loadedReviewCount = scrollInfo.count;
+          if (scrollInfo.gaveUp && scrollInfo.missing > 0) {
+            propertyData.reviewShortfall = scrollInfo.missing;
+          }
         }
 
         // Wait for reviews to load
@@ -730,8 +733,20 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   let idleCycles = 0;
   const MAX_IDLE_CYCLES = expected ? Math.min(24, Math.max(10, Math.ceil(expected / 8))) : 15;
   const MAX_SCROLL_CYCLES = expected ? Math.max(60, Math.ceil(expected * 1.5)) : 60;
+  let stallLoops = 0;
 
   console.log('Starting review loading with expected total:', expected || 'unknown');
+
+  const attemptRecovery = async (attemptNumber) => {
+    const magnitude = -0.4 - attemptNumber * 0.15;
+    const targets = getScrollableTargets();
+    targets.forEach(target => scrollElement(target, magnitude));
+    await wait(700 + attemptNumber * 200);
+    const downMoves = await Promise.all(targets.map(el => ensureMovementOrRetry(el)));
+    return downMoves.some(Boolean);
+  };
+
+  let gaveUpEarly = false;
 
   for (let cycle = 1; cycle <= MAX_SCROLL_CYCLES; cycle += 1) {
     await ensureReviewsContainerOpen();
@@ -751,12 +766,11 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     let anyMoved = movementAttempts.some(Boolean);
 
     if (!anyMoved) {
-      for (const target of targets) {
-        scrollElement(target, -0.4);
+      let recovered = false;
+      for (let attempt = 0; attempt < 3 && !recovered; attempt += 1) {
+        recovered = await attemptRecovery(attempt);
       }
-      await wait(700);
-      const downMoves = await Promise.all(targets.map(el => ensureMovementOrRetry(el)));
-      anyMoved = downMoves.some(Boolean);
+      anyMoved = recovered;
     }
     const clicked = tryClickLoadMore();
 
@@ -784,24 +798,38 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
 
     if (currentCount > lastCount || anyMoved) {
       idleCycles = 0;
+      stallLoops = 0;
       lastCount = currentCount;
     } else {
       idleCycles += 1;
+      stallLoops += 1;
       if (idleCycles > MAX_IDLE_CYCLES) {
+        break;
+      }
+      if (stallLoops >= 20) {
+        console.warn('Exiting review scroll after repeated stalls');
+        gaveUpEarly = true;
         break;
       }
     }
   }
 
   const finalCount = collectReviews();
-  updateTitle(finalCount, 'reviews processed (complete)');
-  if (expected && finalCount < expected) {
+  const missing = expected ? Math.max(0, expected - finalCount) : 0;
+  if (missing > 0 && (gaveUpEarly || finalCount < expected)) {
+    updateTitle(finalCount, 'reviews processed (incomplete)');
     console.warn('Failed to reach expected reviews', { expected, finalCount });
   } else {
+    updateTitle(finalCount, 'reviews processed (complete)');
     console.log('Finished loading reviews', { finalCount, expected });
   }
 
-  return finalCount;
+  return {
+    count: finalCount,
+    expected,
+    missing,
+    gaveUp: missing > 0 && (gaveUpEarly || finalCount < expected)
+  };
 }
 
 // Extract only reviews from reviews page
@@ -1098,6 +1126,10 @@ After analyzing all properties, provide:
     prompt += `**URL**: ${url || 'N/A'}\n`;
     const ratingText = property.rating ? `${property.rating} out of 5` : 'N/A';
     prompt += `**Overall Rating**: ${ratingText} (${property.reviewCount || 0} reviews)\n\n`;
+
+    if (property.reviewShortfall) {
+      prompt += `⚠️ Unable to retrieve the last ${property.reviewShortfall} reviews due to repeated loading stalls.\n\n`;
+    }
     
     if (property.error) {
       prompt += `**Error**: ${property.error}\n\n`;
