@@ -85,9 +85,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     status.className = 'info';
 
     try {
-      chrome.tabs.sendMessage(tab.id, { action: 'startExtraction' }, () => {
+      chrome.tabs.sendMessage(tab.id, { action: 'startExtraction' }, (response) => {
         if (chrome.runtime.lastError) {
           status.textContent = 'Error: ' + chrome.runtime.lastError.message;
+          status.className = 'error';
+          startBtn.disabled = false;
+          return;
+        }
+
+        if (!response) {
+          status.textContent = 'Error: no response from content script.';
+          status.className = 'error';
+          startBtn.disabled = false;
+        } else if (response.status === 'busy') {
+          status.textContent = 'Analysis already in progress. Please wait for it to finish.';
           status.className = 'error';
           startBtn.disabled = false;
         }

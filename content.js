@@ -1,6 +1,18 @@
 // Content script that runs on Airbnb wishlist pages
 let extractionInProgress = false;
 
+chrome.storage.local.get('extractionInProgress', (result) => {
+  if (result && typeof result.extractionInProgress === 'boolean') {
+    extractionInProgress = result.extractionInProgress;
+  }
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.extractionInProgress) {
+    extractionInProgress = Boolean(changes.extractionInProgress.newValue);
+  }
+});
+
 const safeSendRuntimeMessage = (payload) => {
   try {
     chrome.runtime.sendMessage(payload, () => {
@@ -17,7 +29,7 @@ const safeSendRuntimeMessage = (payload) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'getWishlistInfo') {
     const propertyLinks = getPropertyLinks();
-    chrome.storage.local.set({ propertyCount: propertyLinks.length });
+    chrome.storage.local.set({ propertyCount: propertyLinks.length, extractionInProgress });
     sendResponse({
       status: 'ok',
       propertyCount: propertyLinks.length,
@@ -35,36 +47,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.action === 'startExtraction' && !extractionInProgress) {
-    extractionInProgress = true;
-    
-    // Get property links and send to background script
-    const propertyLinks = getPropertyLinks();
-    
-    if (propertyLinks.length === 0) {
-      safeSendRuntimeMessage({
-        action: 'error',
-        error: 'No properties found on this page. Make sure you\'re on a wishlist page.'
+  if (message.action === 'startExtraction') {
+    const initiateExtraction = () => {
+      const propertyLinks = getPropertyLinks();
+
+      if (propertyLinks.length === 0) {
+        safeSendRuntimeMessage({
+          action: 'error',
+          error: 'No properties found on this page. Make sure you\'re on a wishlist page.'
+        });
+        extractionInProgress = false;
+        if (typeof sendResponse === 'function') {
+          sendResponse({ status: 'error' });
+        }
+        return;
+      }
+
+      extractionInProgress = true;
+      chrome.storage.local.set({
+        extractionInProgress: true,
+        propertyCount: propertyLinks.length,
+        analysisPrompt: null,
+        lastExtractionTotal: 0
+      }, () => {
+        safeSendRuntimeMessage({
+          action: 'extractProperties',
+          propertyLinks: propertyLinks
+        });
+        if (typeof sendResponse === 'function') {
+          sendResponse({ status: 'started' });
+        }
       });
-      extractionInProgress = false;
-      sendResponse({ status: 'error' });
-      return;
+    };
+
+    if (extractionInProgress) {
+      chrome.storage.local.get('extractionInProgress', (storedState) => {
+        if (storedState && storedState.extractionInProgress) {
+          if (typeof sendResponse === 'function') {
+            sendResponse({ status: 'busy' });
+          }
+        } else {
+          extractionInProgress = false;
+          initiateExtraction();
+        }
+      });
+      return true;
     }
 
-    // Store property count and clear previous analysis
-    chrome.storage.local.set({
-      propertyCount: propertyLinks.length,
-      analysisPrompt: null,
-      lastExtractionTotal: 0
-    });
-    
-    // Send links to background script to handle extraction
-    safeSendRuntimeMessage({
-      action: 'extractProperties',
-      propertyLinks: propertyLinks
-    });
-    
-    sendResponse({ status: 'started' });
+    initiateExtraction();
     return true;
   }
   return false;

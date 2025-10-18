@@ -751,7 +751,159 @@ function extractReviewsOnly() {
       return candidates[0].text;
     };
 
-    reviewElements.forEach((reviewEl, index) => {
+    const readReviewDate = (root) => {
+      if (!root) {
+        return '';
+      }
+
+      const formatISODate = (value) => {
+        if (!value) {
+          return null;
+        }
+        const trimmed = value.trim();
+        const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (!isoMatch) {
+          return null;
+        }
+        const parsed = new Date(trimmed);
+        if (Number.isNaN(parsed.getTime())) {
+          return trimmed;
+        }
+        return parsed.toLocaleDateString('en-GB', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+      };
+
+      const extractFromText = (rawText) => {
+        if (!rawText) {
+          return null;
+        }
+        const text = rawText.replace(/\s+/g, ' ').trim();
+        if (!text) {
+          return null;
+        }
+
+        const isoEmbedded = text.match(/\b\d{4}-\d{2}-\d{2}\b/);
+        if (isoEmbedded) {
+          const formatted = formatISODate(isoEmbedded[0]);
+          if (formatted) {
+            return formatted;
+          }
+        }
+
+        const monthDayYear = text.match(/\b\d{1,2}\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i);
+        if (monthDayYear) {
+          return monthDayYear[0].replace(/\s+/g, ' ').trim();
+        }
+
+        const monthYear = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i);
+        if (monthYear) {
+          return monthYear[0].replace(/\s+/g, ' ').trim();
+        }
+
+        const shortMonthYear = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4}\b/i);
+        if (shortMonthYear) {
+          const cleaned = shortMonthYear[0].replace(/\./g, '');
+          return cleaned.replace(/\s+/g, ' ').trim();
+        }
+
+        const localizedMonthYear = text.match(/\b([\p{L}]{3,})\s+\d{4}\b/iu);
+        if (localizedMonthYear) {
+          return localizedMonthYear[0].replace(/\s+/g, ' ').trim();
+        }
+
+        const stayedMonthOnly = text.match(/(?:Stayed in|Se hosped[oó] en|Ha soggiornato a|Ha soggiornato in|Verblieb im|Stayed at)\s+([\p{L}]{3,})\b/iu);
+        if (stayedMonthOnly) {
+          return stayedMonthOnly[0].replace(/\s+/g, ' ').trim();
+        }
+
+        const stayedIn = text.match(/Stayed in\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}/i);
+        if (stayedIn) {
+          return stayedIn[0].replace(/\s+/g, ' ').trim();
+        }
+
+        return null;
+      };
+
+      const seenNodes = new Set();
+      const enqueue = (node, queue) => {
+        if (!node || seenNodes.has(node)) {
+          return;
+        }
+        seenNodes.add(node);
+        queue.push(node);
+      };
+
+      const considerNode = (node) => {
+        if (!node) {
+          return null;
+        }
+
+        const datetime = node.getAttribute?.('datetime');
+        const datetimeFormatted = formatISODate(datetime);
+        if (datetimeFormatted) {
+          return datetimeFormatted;
+        }
+
+        const attrCandidates = [
+          node.getAttribute?.('aria-label'),
+          node.getAttribute?.('title'),
+          node.getAttribute?.('aria-description'),
+          node.getAttribute?.('data-date')
+        ];
+
+        if (node.dataset) {
+          attrCandidates.push(...Object.values(node.dataset));
+        }
+
+        for (const candidate of attrCandidates) {
+          const extracted = extractFromText(candidate);
+          if (extracted) {
+            return extracted;
+          }
+          const formatted = formatISODate(candidate);
+          if (formatted) {
+            return formatted;
+          }
+        }
+
+        const textExtracted = extractFromText(node.textContent);
+        if (textExtracted) {
+          return textExtracted;
+        }
+
+        return null;
+      };
+
+      const queue = [];
+      enqueue(root.querySelector('time'), queue);
+      root.querySelectorAll('[data-testid*="date" i]').forEach(node => enqueue(node, queue));
+      root.querySelectorAll('[data-testid*="arrival" i]').forEach(node => enqueue(node, queue));
+      root.querySelectorAll('[class*="date" i]').forEach(node => enqueue(node, queue));
+      root.querySelectorAll('[class*="arrival" i]').forEach(node => enqueue(node, queue));
+      root.querySelectorAll('[class*="stay" i]').forEach(node => enqueue(node, queue));
+      root.querySelectorAll('span').forEach(node => enqueue(node, queue));
+      root.querySelectorAll('div').forEach(node => enqueue(node, queue));
+
+      enqueue(root.previousElementSibling, queue);
+      enqueue(root.nextElementSibling, queue);
+      enqueue(root.parentElement, queue);
+      Array.from(root.children).forEach(child => enqueue(child, queue));
+
+      while (queue.length) {
+        const node = queue.shift();
+        const extracted = considerNode(node);
+        if (extracted) {
+          return extracted;
+        }
+      }
+
+      return extractFromText(root.textContent) || '';
+    };
+
+    reviewElements.forEach((reviewEl) => {
       const review = {
         text: '',
         rating: 'N/A',
@@ -763,20 +915,7 @@ function extractReviewsOnly() {
       review.text = selectBestReviewText(textSpans);
 
       // Extract date
-      const datePatterns = [
-        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i,
-        /\b\d{1,2}\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i,
-        /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\b/i
-      ];
-      
-      const allText = reviewEl.textContent;
-      for (const pattern of datePatterns) {
-        const match = allText.match(pattern);
-        if (match) {
-          review.date = match[0];
-          break;
-        }
-      }
+      review.date = readReviewDate(reviewEl);
 
       if (review.text) {
         reviews.push(review);
@@ -792,9 +931,20 @@ function extractReviewsOnly() {
 }
 
 function generateLLMPrompt(propertiesData) {
-  let prompt = `Before you begin any analysis, ask me to clarify the must-have requirements for this trip (for example: minimum bedrooms, washer/dryer availability, budget range, accessibility needs, preferred neighbourhoods, or other deal-breakers). Wait for my response, then continue with the analysis below.
+  const today = new Date();
+  const formattedDate = today.toLocaleDateString('en-GB', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  let prompt = `Today is ${formattedDate}.
+
+Before you begin any analysis, ask me to clarify the must-have requirements for this trip (for example: minimum bedrooms, washer/dryer availability, budget range, accessibility needs, preferred neighbourhoods, or other deal-breakers). Wait for my response, then continue with the analysis below.
 
 I'm analyzing ${propertiesData.length} Airbnb properties from my wishlist. I need you to carefully review each property's details and reviews, paying special attention to subtle hints and concerns that guests might mention even when giving high ratings. People often soften negative feedback or bury concerns in otherwise positive reviews, especially when the host is friendly.
+
+While analyzing reviews, explicitly note if a property has mostly old reviews and highlight any risks that the information may be outdated.
 
 Please analyze:
 1. Hidden red flags in reviews (e.g., mentions of issues followed by "but it was fine")
@@ -820,7 +970,8 @@ After analyzing all properties, provide:
 
     prompt += `**Title**: ${titleLine}\n`;
     prompt += `**URL**: ${url || 'N/A'}\n`;
-    prompt += `**Overall Rating**: ${property.rating || 'N/A'} (${property.reviewCount || 0} reviews)\n\n`;
+    const ratingText = property.rating ? `${property.rating} out of 5` : 'N/A';
+    prompt += `**Overall Rating**: ${ratingText} (${property.reviewCount || 0} reviews)\n\n`;
     
     if (property.error) {
       prompt += `**Error**: ${property.error}\n\n`;
