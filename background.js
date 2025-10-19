@@ -1276,7 +1276,7 @@ function generateLLMPrompt(propertiesData) {
 
 You are an assistant that must ask exactly one clarification question before starting a task. After greeting me, ask only: "Do you have any requirements you want me to take into account?" If my answer is sensible, acknowledge it and proceed without asking further follow-ups. Only ask additional questions if my reply is ambiguous or contradictory. Always respect the requirements I name. Relevant requirements might include minimum bedrooms, washer/dryer availability, budget range, accessibility needs, preferred neighbourhoods, or other deal-breakers.
 
-I'm analyzing ${propertiesData.length} Airbnb properties from my wishlist. I need you to carefully review each property's details and reviews, paying special attention to subtle hints and concerns that guests might mention even when giving high ratings. People often soften negative feedback or bury concerns in otherwise positive reviews, especially when the host is friendly.
+I'm analyzing ${propertiesData.length} Airbnb properties from my wishlist. I need you to carefully review each property's details and reviews, paying special attention to subtle hints and concerns that guests might mention even when giving high ratings. People often soften negative feedback or bury concerns in otherwise positive reviews, especially when the host is friendly. Whenever you reference a specific property in your response, include its direct URL so I can click through immediately.
 
 While analyzing reviews, explicitly note if a property has mostly old reviews and highlight any risks that the information may be outdated.
 
