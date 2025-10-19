@@ -175,6 +175,34 @@ async function resetExtractionState(options = {}) {
   });
 }
 
+async function flushPropertyCacheForIds(propertyIds = []) {
+  if (!propertyIds || propertyIds.length === 0) {
+    return false;
+  }
+
+  await loadPropertyCache();
+  if (!propertyCacheStore || Object.keys(propertyCacheStore).length === 0) {
+    return false;
+  }
+
+  let removed = false;
+  propertyIds.forEach((propertyId) => {
+    if (!propertyId || !propertyCacheStore[propertyId]) {
+      return;
+    }
+    delete propertyCacheStore[propertyId];
+    removed = true;
+  });
+
+  if (!removed) {
+    return false;
+  }
+
+  markCacheDirty();
+  await persistPropertyCacheIfDirty();
+  return true;
+}
+
 chrome.runtime.onStartup.addListener(() => {
   resetExtractionState();
   cleanupExpiredCache();
@@ -235,6 +263,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Start the extraction process
     extractAllProperties(message.propertyLinks);
     sendResponse({ status: 'started' });
+    return true;
+  }
+
+  if (message.action === 'flushPropertyCache') {
+    const propertyIds = Array.isArray(message.propertyIds) ? message.propertyIds : [];
+    flushPropertyCacheForIds(propertyIds).then((removed) => {
+      sendResponse({ status: removed ? 'flushed' : 'noop' });
+    }).catch((error) => {
+      console.debug('Failed to flush property cache', error);
+      sendResponse({ status: 'error', error: error?.message || 'Failed to flush cache' });
+    });
     return true;
   }
 

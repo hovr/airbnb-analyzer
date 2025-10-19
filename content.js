@@ -30,10 +30,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'getWishlistInfo') {
     const propertyLinks = getPropertyLinks();
     chrome.storage.local.set({ propertyCount: propertyLinks.length, extractionInProgress });
-    sendResponse({
+    const response = {
       status: 'ok',
       propertyCount: propertyLinks.length,
       extractionInProgress
+    };
+    if (message.includePropertyLinks) {
+      response.propertyLinks = propertyLinks;
+    }
+    sendResponse({
+      ...response
     });
     return false;
   }

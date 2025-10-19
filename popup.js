@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const propertyCount = document.getElementById('propertyCount');
   const resetContainer = document.getElementById('resetLink');
   const resetLink = document.getElementById('resetState');
+  const currentWishlistPropertyIds = new Set();
 
   const resetStatus = () => {
     status.textContent = '';
@@ -64,6 +65,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  const getPropertyIdFromUrl = (url) => {
+    if (!url) {
+      return null;
+    }
+    const match = url.match(/\/rooms\/(\d+)/);
+    return match ? match[1] : null;
+  };
+
+  const updatePropertyIds = (links) => {
+    currentWishlistPropertyIds.clear();
+    if (!Array.isArray(links)) {
+      return;
+    }
+    links.forEach((link) => {
+      const propertyId = getPropertyIdFromUrl(link?.url);
+      if (propertyId) {
+        currentWishlistPropertyIds.add(propertyId);
+      }
+    });
+  };
+
   const updateCompletionState = (totalProcessed) => {
     if (typeof totalProcessed !== 'number' || totalProcessed <= 0) {
       return;
@@ -103,15 +125,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     updatePropertyCountDisplay(state.propertyCount);
   }
 
-  const refreshWishlistInfo = async () => {
+  const refreshWishlistInfo = async (options = {}) => {
     return new Promise((resolve) => {
-      chrome.tabs.sendMessage(tab.id, { action: 'getWishlistInfo' }, (response) => {
+      chrome.tabs.sendMessage(tab.id, { action: 'getWishlistInfo', includePropertyLinks: Boolean(options?.includeLinks) }, (response) => {
         if (chrome.runtime.lastError) {
           resolve(null);
           return;
         }
         if (response && response.status === 'ok') {
           updatePropertyCountDisplay(response.propertyCount);
+          if (options?.includeLinks && response.propertyLinks) {
+            updatePropertyIds(response.propertyLinks);
+          }
           resolve(response);
         } else {
           resolve(null);
@@ -120,7 +145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   };
 
-  await refreshWishlistInfo();
+  await refreshWishlistInfo({ includeLinks: true });
 
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
@@ -158,7 +183,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           startBtn.disabled = false;
           updateResetVisibility({ analysisPrompt: true, lastExtractionTotal: message.total });
           chrome.runtime.onMessage.removeListener(listener);
-          refreshWishlistInfo();
+          refreshWishlistInfo({ includeLinks: true });
         } else if (message.action === 'error') {
           status.textContent = message.error ? `Error: ${message.error}` : 'Error during analysis.';
           status.className = message.error === 'Analysis cancelled' ? 'info' : 'error';
@@ -193,6 +218,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   resetLink.addEventListener('click', async (event) => {
     event.preventDefault();
     try {
+      await refreshWishlistInfo({ includeLinks: true });
+      const propertyIds = Array.from(currentWishlistPropertyIds);
+      let cacheFlushed = false;
+
+      if (propertyIds.length > 0) {
+        const storedCache = await chrome.storage.local.get('propertyCache');
+        const cacheEntries = storedCache?.propertyCache || {};
+        const hasMatches = propertyIds.some((id) => cacheEntries[id]);
+
+        if (hasMatches) {
+          const shouldFlush = window.confirm('Cached property data for this wishlist was found. Do you want to flush it?');
+          if (shouldFlush) {
+            const flushResponse = await new Promise((resolve, reject) => {
+              chrome.runtime.sendMessage({ action: 'flushPropertyCache', propertyIds }, (response) => {
+                if (chrome.runtime.lastError) {
+                  reject(new Error(chrome.runtime.lastError.message));
+                  return;
+                }
+                resolve(response);
+              });
+            });
+
+            if (flushResponse?.status === 'error') {
+              throw new Error(flushResponse.error || 'Failed to flush cache');
+            }
+            cacheFlushed = flushResponse?.status === 'flushed';
+          }
+        }
+      }
+
       await new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({ action: 'resetExtractionState' }, (response) => {
           if (chrome.runtime.lastError) {
@@ -217,7 +272,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       startBtn.disabled = false;
       resetStatus();
-      status.textContent = 'Analyzer reset.';
+      status.textContent = cacheFlushed ? 'Analyzer reset and cache cleared.' : 'Analyzer reset.';
       status.className = 'info';
       updateResetVisibility({});
     } catch (error) {
