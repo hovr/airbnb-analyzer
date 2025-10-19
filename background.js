@@ -1,5 +1,122 @@
 let currentExtractionContext = null;
 
+const CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+let propertyCacheStore = null;
+let propertyCacheDirty = false;
+
+const cloneData = (value) => {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (error) {
+    console.debug('Failed to clone data, returning original reference');
+    return value;
+  }
+};
+
+const normalizeReviewCountValue = (value) => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const digits = String(value).replace(/[^0-9]/g, '');
+  if (!digits) {
+    return null;
+  }
+  const parsed = Number.parseInt(digits, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const loadPropertyCache = async () => {
+  if (propertyCacheStore) {
+    return propertyCacheStore;
+  }
+  try {
+    const stored = await chrome.storage.local.get('propertyCache');
+    propertyCacheStore = stored.propertyCache || {};
+  } catch (error) {
+    console.debug('Failed to load property cache', error);
+    propertyCacheStore = {};
+  }
+  return propertyCacheStore;
+};
+
+const markCacheDirty = () => {
+  propertyCacheDirty = true;
+};
+
+const persistPropertyCacheIfDirty = async () => {
+  if (!propertyCacheDirty || !propertyCacheStore) {
+    return;
+  }
+  try {
+    await chrome.storage.local.set({ propertyCache: propertyCacheStore });
+    propertyCacheDirty = false;
+  } catch (error) {
+    console.error('Failed to persist property cache:', error);
+  }
+};
+
+const getPropertyIdFromUrl = (url) => {
+  if (!url) {
+    return null;
+  }
+  const match = url.match(/\/rooms\/(\d+)/);
+  return match ? match[1] : null;
+};
+
+const cleanupExpiredCache = async (now = Date.now()) => {
+  const cache = await loadPropertyCache();
+  let removed = false;
+  Object.entries(cache).forEach(([key, entry]) => {
+    if (!entry || !entry.cachedAt || (now - entry.cachedAt) > CACHE_TTL_MS) {
+      delete cache[key];
+      removed = true;
+    }
+  });
+  if (removed) {
+    markCacheDirty();
+  }
+};
+
+const getCachedPropertyData = (propertyId, normalizedReviewCount, now = Date.now()) => {
+  if (!propertyId) {
+    return null;
+  }
+  if (!propertyCacheStore) {
+    return null;
+  }
+  const entry = propertyCacheStore[propertyId];
+  if (!entry || !entry.cachedAt || (now - entry.cachedAt) > CACHE_TTL_MS) {
+    return null;
+  }
+  const cachedCount = entry.wishlistReviewCount ?? null;
+  const targetCount = normalizedReviewCount ?? null;
+  if (cachedCount !== targetCount) {
+    return null;
+  }
+  if (!entry.data) {
+    return null;
+  }
+  return cloneData(entry.data);
+};
+
+const cachePropertyData = (propertyId, normalizedReviewCount, data, now = Date.now()) => {
+  if (!propertyId || !data) {
+    return;
+  }
+  if (!propertyCacheStore) {
+    propertyCacheStore = {};
+  }
+  propertyCacheStore[propertyId] = {
+    cachedAt: now,
+    wishlistReviewCount: normalizedReviewCount ?? null,
+    data: cloneData(data)
+  };
+  markCacheDirty();
+};
+
 function registerContextTab(context, tabId) {
   if (!context || !tabId) {
     return;
@@ -60,6 +177,8 @@ async function resetExtractionState(options = {}) {
 
 chrome.runtime.onStartup.addListener(() => {
   resetExtractionState();
+  cleanupExpiredCache();
+  persistPropertyCacheIfDirty();
 });
 
 const MIN_STAGGER_DELAY_MS = 800;
@@ -133,7 +252,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function extractAllProperties(propertyLinks) {
+async function extractAllProperties(rawPropertyLinks) {
+  const now = Date.now();
+  await loadPropertyCache();
+  await cleanupExpiredCache(now);
+  const decoratedLinks = rawPropertyLinks.map((link) => {
+    const normalizedReviewCount = normalizeReviewCountValue(link.reviewCount);
+    const propertyId = getPropertyIdFromUrl(link.url);
+    const cached = propertyId ? getCachedPropertyData(propertyId, normalizedReviewCount, now) : null;
+    return {
+      original: link,
+      normalizedReviewCount,
+      propertyId,
+      cached,
+      shouldUseCache: Boolean(cached)
+    };
+  });
+
   const propertiesData = [];
   const CONCURRENCY_LIMIT = 1;
 
@@ -145,7 +280,7 @@ async function extractAllProperties(propertyLinks) {
   await chrome.storage.local.set({ 
     extractionInProgress: true,
     currentProperty: 0,
-    totalProperties: propertyLinks.length,
+    totalProperties: decoratedLinks.length,
     lastExtractionTotal: 0,
     analysisPrompt: null
   });
@@ -155,7 +290,7 @@ async function extractAllProperties(propertyLinks) {
 
   let originContext = null;
 
-  const results = new Array(propertyLinks.length);
+  const results = new Array(decoratedLinks.length);
   const activeIndices = new Set();
   await chrome.storage.local.set({
     activePropertyIndices: [],
@@ -165,13 +300,13 @@ async function extractAllProperties(propertyLinks) {
   const buildProgressList = () => {
     const sorted = Array.from(activeIndices).sort((a, b) => a - b);
     if (!sorted.length) {
-      return `${Math.min(completed + 1, propertyLinks.length)}`;
+      return `${Math.min(completed + 1, decoratedLinks.length)}`;
     }
     return sorted.map(idx => idx + 1).join(', ');
   };
 
   const launchNext = async () => {
-    if (nextIndex >= propertyLinks.length) {
+    if (nextIndex >= decoratedLinks.length) {
       return;
     }
 
@@ -182,7 +317,7 @@ async function extractAllProperties(propertyLinks) {
     const currentIndex = nextIndex;
     nextIndex += 1;
 
-    const linkData = propertyLinks[currentIndex];
+    const linkData = decoratedLinks[currentIndex];
     activeIndices.add(currentIndex);
     const progressList = buildProgressList();
 
@@ -194,8 +329,8 @@ async function extractAllProperties(propertyLinks) {
     safeSendRuntimeMessage({
       action: 'progress',
       current: progressList,
-      total: propertyLinks.length,
-      propertyName: `Processing properties: ${progressList}`
+      total: decoratedLinks.length,
+      propertyName: linkData.shouldUseCache ? `Using cached data for properties: ${progressList}` : `Processing properties: ${progressList}`
     });
 
     await chrome.storage.local.set({ currentProperty: currentIndex + 1 });
@@ -224,24 +359,30 @@ async function extractAllProperties(propertyLinks) {
       const staggerDelay = MIN_STAGGER_DELAY_MS + Math.random() * STAGGER_DELAY_JITTER_MS;
       await sleep(staggerDelay);
 
-      const data = await extractPropertyData(
-        linkData.url,
-        linkData.title,
-        linkData.rating,
-        linkData.reviewCount,
-        currentIndex,
-        propertyLinks.length
-      );
-      results[currentIndex] = data;
+      if (linkData.shouldUseCache && linkData.cached) {
+        results[currentIndex] = linkData.cached;
+      } else {
+        const data = await extractPropertyData(
+          linkData.original.url,
+          linkData.original.title,
+          linkData.original.rating,
+          linkData.original.reviewCount,
+          currentIndex,
+          decoratedLinks.length,
+          linkData.normalizedReviewCount,
+          linkData.propertyId
+        );
+        results[currentIndex] = data;
+      }
     } catch (error) {
       if (currentExtractionContext?.cancelled) {
-        console.debug('Extraction cancelled while processing', linkData.url);
+        console.debug('Extraction cancelled while processing', linkData.original?.url);
         return;
       }
-      console.error(`Error extracting ${linkData.url}:`, error);
+      console.error(`Error extracting ${linkData.original?.url || 'unknown'}:`, error);
       results[currentIndex] = {
-        url: linkData.url,
-        title: linkData.title,
+        url: linkData.original?.url,
+        title: linkData.original?.title,
         error: 'Failed to extract data: ' + error.message
       };
     } finally {
@@ -256,7 +397,7 @@ async function extractAllProperties(propertyLinks) {
       safeSendRuntimeMessage({
         action: 'progress',
         current: updatedList,
-        total: propertyLinks.length,
+        total: decoratedLinks.length,
         propertyName: updatedList ? `Processing properties: ${updatedList}` : 'Finalizing results'
       });
 
@@ -264,15 +405,15 @@ async function extractAllProperties(propertyLinks) {
         return;
       }
 
-      if (completed < propertyLinks.length) {
+      if (completed < decoratedLinks.length) {
         await launchNext();
         return;
       }
 
       safeSendRuntimeMessage({
         action: 'progress',
-        current: `${propertyLinks.length}`,
-        total: propertyLinks.length,
+        current: `${decoratedLinks.length}`,
+        total: decoratedLinks.length,
         propertyName: 'Finalizing results'
       });
 
@@ -282,7 +423,7 @@ async function extractAllProperties(propertyLinks) {
     }
   };
 
-  const starters = Math.min(CONCURRENCY_LIMIT, propertyLinks.length);
+  const starters = Math.min(CONCURRENCY_LIMIT, decoratedLinks.length);
   const running = [];
   for (let i = 0; i < starters; i += 1) {
     running.push(launchNext());
@@ -295,9 +436,10 @@ async function extractAllProperties(propertyLinks) {
     results.forEach((value, idx) => {
       if (!value) {
         missingIndices.push(idx + 1);
+        const fallbackLink = decoratedLinks[idx]?.original;
         results[idx] = {
-          url: propertyLinks[idx]?.url || 'unknown',
-          title: propertyLinks[idx]?.title || `Property ${idx + 1}`,
+          url: fallbackLink?.url || 'unknown',
+          title: fallbackLink?.title || `Property ${idx + 1}`,
           error: 'Extraction did not complete (timeout or user interruption).'
         };
       }
@@ -320,12 +462,12 @@ async function extractAllProperties(propertyLinks) {
       extractionInProgress: false,
       currentProperty: 0,
       totalProperties: 0,
-      lastExtractionTotal: propertyLinks.length
+      lastExtractionTotal: decoratedLinks.length
     });
 
     safeSendRuntimeMessage({
       action: 'complete',
-      total: propertyLinks.length
+      total: decoratedLinks.length
     });
   } else {
     await chrome.storage.local.set({
@@ -337,15 +479,18 @@ async function extractAllProperties(propertyLinks) {
     safeSendRuntimeMessage({
       action: 'error',
       error: 'Analysis cancelled',
-      total: propertyLinks.length
+      total: decoratedLinks.length
     });
   }
 
   currentExtractionContext = null;
+  await persistPropertyCacheIfDirty();
 }
 
-async function extractPropertyData(url, title, wishlistRating, wishlistReviewCount, positionIndex, totalCount) {
-  const propertyId = url.match(/\/rooms\/(\d+)/)?.[1];
+async function extractPropertyData(url, title, wishlistRating, wishlistReviewCount, positionIndex, totalCount, normalizedWishlistReviewCount, propertyIdOverride) {
+  const propertyId = propertyIdOverride || getPropertyIdFromUrl(url);
+  const cacheKeyReviewCount = normalizedWishlistReviewCount ?? normalizeReviewCountValue(wishlistReviewCount);
+  const startedAt = Date.now();
   
   // First, open the main property page to get details
   const mainTab = await chrome.tabs.create({ url: url, active: true });
@@ -366,6 +511,12 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
     });
     
     const propertyData = mainPageData && mainPageData[0] ? mainPageData[0].result : {};
+    if (propertyId && !propertyData.url) {
+      propertyData.url = url;
+    }
+    if (title && !propertyData.title) {
+      propertyData.title = title;
+    }
     
     // Close main tab
     unregisterContextTab(currentExtractionContext, mainTab.id);
@@ -425,6 +576,9 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
       }
     }
     
+    if (propertyId && !propertyData.error) {
+      cachePropertyData(propertyId, cacheKeyReviewCount, propertyData, startedAt);
+    }
     return propertyData;
   } catch (error) {
     try {
