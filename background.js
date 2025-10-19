@@ -711,6 +711,77 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
       }
     }
 
+    if (!data.expectedReviewCount) {
+      const summarySelectors = [
+        '[data-section-id="REVIEWS_DEFAULT"] h2',
+        '[data-section-id="REVIEWS_DEFAULT"] span',
+        '[data-testid="reviews-tab-panel"] h2',
+        '[data-testid="reviews-tab-panel"] span',
+        '[data-testid="reviews-tab"] span',
+        '[data-testid="rating-section"] span'
+      ];
+
+      const seenNodes = new Set();
+      for (const selector of summarySelectors) {
+        document.querySelectorAll(selector).forEach(node => {
+          if (!node || seenNodes.has(node) || data.expectedReviewCount) {
+            return;
+          }
+
+          seenNodes.add(node);
+          const candidates = [
+            node.textContent,
+            node.getAttribute?.('aria-label'),
+            node.getAttribute?.('title')
+          ];
+
+          for (const candidate of candidates) {
+            if (!candidate) {
+              continue;
+            }
+            const countMatch = candidate.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
+            if (countMatch && applyReviewCount(countMatch[1])) {
+              return;
+            }
+          }
+        });
+        if (data.expectedReviewCount) {
+          break;
+        }
+      }
+    }
+
+    if (!data.expectedReviewCount) {
+      const ldScripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+      for (const script of ldScripts) {
+        if (!script?.textContent) {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(script.textContent.trim());
+          const entries = Array.isArray(parsed) ? parsed : [parsed];
+          for (const entry of entries) {
+            const reviewCount = entry?.aggregateRating?.reviewCount ?? entry?.reviewCount;
+            if (applyReviewCount(reviewCount)) {
+              break;
+            }
+          }
+          if (data.expectedReviewCount) {
+            break;
+          }
+        } catch (error) {
+          console.debug('Failed to parse ld+json for review count', error);
+        }
+      }
+    }
+
+    if (!data.expectedReviewCount) {
+      const inlineReviews = document.querySelectorAll('[data-section-id="REVIEWS_DEFAULT"] [data-review-id], [data-section-id="REVIEWS_DEFAULT"] [role="listitem"]');
+      if (inlineReviews.length > 0) {
+        applyReviewCount(inlineReviews.length);
+      }
+    }
+
     if (!data.reviewCount && data.expectedReviewCount) {
       data.reviewCount = String(data.expectedReviewCount);
     }
