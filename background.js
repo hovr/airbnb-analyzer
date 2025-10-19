@@ -4,6 +4,16 @@ const CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 let propertyCacheStore = null;
 let propertyCacheDirty = false;
 
+const ACTIVE_ICON_PATHS = {
+  16: 'icon16.png',
+  48: 'icon48.png',
+  128: 'icon128.png'
+};
+
+let inactiveIconDataCache = null;
+let inactiveIconDataPromise = null;
+let lastActionWasWishlist = null;
+
 const cloneData = (value) => {
   if (value === undefined || value === null) {
     return value;
@@ -203,10 +213,161 @@ async function flushPropertyCacheForIds(propertyIds = []) {
   return true;
 }
 
+const isWishlistUrl = (url) => {
+  if (typeof url !== 'string') {
+    return false;
+  }
+  return /^https:\/\/www\.airbnb\.(?:co\.uk|com)\/wishlists\//i.test(url);
+};
+
+const convertIconToGrayscale = async (path) => {
+  if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
+    return null;
+  }
+
+  const url = chrome.runtime.getURL(path);
+  const response = await fetch(url);
+  if (!response.ok) {
+    return null;
+  }
+
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    context.drawImage(bitmap, 0, 0);
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const { data } = imageData;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+      data[i] = gray;
+      data[i + 1] = gray;
+      data[i + 2] = gray;
+    }
+
+    return imageData;
+  } finally {
+    bitmap.close?.();
+  }
+};
+
+const loadInactiveIconData = async () => {
+  if (inactiveIconDataCache) {
+    return inactiveIconDataCache;
+  }
+  if (inactiveIconDataPromise) {
+    return inactiveIconDataPromise;
+  }
+
+  inactiveIconDataPromise = (async () => {
+    const entries = await Promise.all(
+      Object.entries(ACTIVE_ICON_PATHS).map(async ([size, path]) => {
+        const grayscaleData = await convertIconToGrayscale(path);
+        return [size, grayscaleData];
+      })
+    );
+    inactiveIconDataCache = entries.reduce((acc, [size, imageData]) => {
+      if (imageData) {
+        acc[size] = imageData;
+      }
+      return acc;
+    }, {});
+    return inactiveIconDataCache;
+  })();
+
+  try {
+    return await inactiveIconDataPromise;
+  } finally {
+    inactiveIconDataPromise = null;
+  }
+};
+
+const setActionState = async (isWishlistActive) => {
+  const targetState = Boolean(isWishlistActive);
+  if (lastActionWasWishlist === targetState) {
+    return;
+  }
+
+  try {
+    if (targetState) {
+      await chrome.action.setPopup({ popup: 'popup.html' });
+      await chrome.action.setIcon({ path: ACTIVE_ICON_PATHS });
+    } else {
+      await chrome.action.setPopup({ popup: 'inactive.html' });
+      const iconData = await loadInactiveIconData();
+      if (iconData && Object.keys(iconData).length) {
+        await chrome.action.setIcon({ imageData: iconData });
+      } else {
+        await chrome.action.setIcon({ path: ACTIVE_ICON_PATHS });
+      }
+    }
+    lastActionWasWishlist = targetState;
+  } catch (error) {
+    console.debug('setActionState failed', error);
+  }
+};
+
+const evaluateTabForAction = async (tab) => {
+  if (!tab) {
+    await setActionState(false);
+    return;
+  }
+  const isWishlist = isWishlistUrl(tab.url || '');
+  await setActionState(isWishlist);
+};
+
+const updateActionForTabId = async (tabId) => {
+  if (!tabId) {
+    await setActionState(false);
+    return;
+  }
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await evaluateTabForAction(tab);
+  } catch (error) {
+    console.debug('updateActionForTabId failed', error);
+    await setActionState(false);
+  }
+};
+
+const initializeActionState = async () => {
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await evaluateTabForAction(activeTab || null);
+  } catch (error) {
+    console.debug('initializeActionState failed', error);
+    await setActionState(false);
+  }
+};
 chrome.runtime.onStartup.addListener(() => {
   resetExtractionState();
   cleanupExpiredCache();
   persistPropertyCacheIfDirty();
+  initializeActionState();
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  initializeActionState();
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (!activeInfo || typeof activeInfo.tabId !== 'number') {
+    setActionState(false);
+    return;
+  }
+  updateActionForTabId(activeInfo.tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' || changeInfo.url) {
+    evaluateTabForAction(tab);
+  }
 });
 
 const MIN_STAGGER_DELAY_MS = 800;
