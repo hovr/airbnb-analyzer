@@ -39,7 +39,8 @@ Airbnb Wishlist Analyzer is a Chrome extension that gathers details and reviews 
 2. **Start the analyzer**
    - Click the Airbnb Wishlist Analyzer icon in the Chrome toolbar.
    - The popup will show how many properties it found. Click the **Start Analysis** button.
-   - The extension will automatically open property tabs in the background, collect details, and scroll through reviews. This may take several minutes depending on how many properties you have.
+   - The extension opens **one** property tab at a time and must stay visible while it works. Do not switch that tab away or close it until the run finishes; doing so can interrupt review collection.
+   - The extension automatically collects details, scrolls through reviews, and then closes the property tab before moving to the next one. This may take several minutes depending on how many properties you have.
 
 3. **Copy the analysis prompt**
    - When the analysis is complete, the popup will display a success message and enable the **Copy Prompt** button.
@@ -47,6 +48,13 @@ Airbnb Wishlist Analyzer is a Chrome extension that gathers details and reviews 
 
 4. **Re-run if needed**
    - To re-run the analysis on the same or another wishlist, return to the wishlist page, open the extension popup again, and click **Start Analysis**.
+   - If you click **Reset Analyzer** in the popup, you’ll be asked whether to clear the cached data for the properties currently in view. Choose **Yes** if you want a completely fresh scrape (for example, after new reviews appear).
+
+## Recent improvements you should know about
+
+- **Smart caching & reset control** – The extension caches detailed property data to avoid reloading reviews unnecessarily. When you reset the analyzer, you’ll see a prompt asking whether to flush the cache for the wishlist you’re viewing, so you can decide between speed and freshness.
+- **Clear tab labels** – While reviews load, each property tab automatically updates its browser tab label to show the property number and how many reviews have been processed (for example, `#3 12/15 reviews`). This makes it easy to see progress at a glance.
+- **Icon state awareness** – The extension icon now turns monochrome and opens a simple “You need to be on an Airbnb wishlist page” message if you activate it outside an eligible wishlist. Head to a wishlist to restore the full popup.
 
 ## Troubleshooting tips
 
