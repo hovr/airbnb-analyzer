@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const copyBtn = document.getElementById('copyBtn');
   const status = document.getElementById('status');
   const propertyCount = document.getElementById('propertyCount');
+  const resetContainer = document.getElementById('resetLink');
   const resetLink = document.getElementById('resetState');
 
   const resetStatus = () => {
@@ -32,6 +33,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     'activePropertyIndices',
     'completedPropertyCount'
   ]);
+
+  const shouldShowReset = (stateObj) => {
+    if (!stateObj) {
+      return false;
+    }
+    return Boolean(
+      stateObj.extractionInProgress ||
+      (typeof stateObj.completedPropertyCount === 'number' && stateObj.completedPropertyCount > 0) ||
+      (typeof stateObj.totalProperties === 'number' && stateObj.totalProperties > 0) ||
+      stateObj.analysisPrompt ||
+      (typeof stateObj.lastExtractionTotal === 'number' && stateObj.lastExtractionTotal > 0)
+    );
+  };
+
+  const updateResetVisibility = (stateObj) => {
+    if (!resetContainer) {
+      return;
+    }
+    resetContainer.style.display = shouldShowReset(stateObj) ? 'block' : 'none';
+  };
+
+  updateResetVisibility(state);
 
   const updatePropertyCountDisplay = (count) => {
     if (typeof count === 'number') {
@@ -71,6 +94,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       status.innerHTML = `Processing properties...`;
     }
     status.className = 'info progress';
+    updateResetVisibility({ extractionInProgress: true });
   } else if (state.analysisPrompt && state.lastExtractionTotal > 0) {
     updateCompletionState(state.lastExtractionTotal);
   }
@@ -132,12 +156,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (message.action === 'complete') {
           updateCompletionState(message.total);
           startBtn.disabled = false;
+          updateResetVisibility({ analysisPrompt: true, lastExtractionTotal: message.total });
           chrome.runtime.onMessage.removeListener(listener);
           refreshWishlistInfo();
         } else if (message.action === 'error') {
-          status.textContent = 'Error: ' + message.error;
-          status.className = 'error';
+          status.textContent = message.error ? `Error: ${message.error}` : 'Error during analysis.';
+          status.className = message.error === 'Analysis cancelled' ? 'info' : 'error';
           startBtn.disabled = false;
+          updateResetVisibility({});
           chrome.runtime.onMessage.removeListener(listener);
         }
       });
@@ -191,8 +217,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       startBtn.disabled = false;
       resetStatus();
-      status.textContent = 'Analyzer state reset.';
+      status.textContent = 'Analyzer reset.';
       status.className = 'info';
+      updateResetVisibility({});
     } catch (error) {
       status.textContent = 'Error resetting: ' + error.message;
       status.className = 'error';

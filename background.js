@@ -1,4 +1,51 @@
-async function resetExtractionState() {
+let currentExtractionContext = null;
+
+function registerContextTab(context, tabId) {
+  if (!context || !tabId) {
+    return;
+  }
+  context.tabs.add(tabId);
+}
+
+function unregisterContextTab(context, tabId) {
+  if (!context || !tabId) {
+    return;
+  }
+  context.tabs.delete(tabId);
+}
+
+async function closeTabSafe(tabId) {
+  if (!tabId) {
+    return;
+  }
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (error) {
+    if (error && error.message && error.message.includes('No tab')) {
+      return;
+    }
+    console.debug('closeTabSafe ignored', error?.message || error);
+  }
+}
+
+async function cancelActiveExtraction() {
+  const context = currentExtractionContext;
+  if (!context) {
+    return false;
+  }
+  if (context.cancelled) {
+    return false;
+  }
+  context.cancelled = true;
+  const tabIds = Array.from(context.tabs.values());
+  await Promise.all(tabIds.map((tabId) => closeTabSafe(tabId)));
+  return true;
+}
+
+async function resetExtractionState(options = {}) {
+  if (!options.skipCancel) {
+    await cancelActiveExtraction();
+  }
   await chrome.storage.local.set({
     extractionInProgress: false,
     currentProperty: 0,
@@ -53,6 +100,11 @@ const safeSendRuntimeMessage = (payload) => {
         console.debug('runtime.sendMessage ignored:', chrome.runtime.lastError.message);
       }
     });
+    if (payload?.action === 'complete' || payload?.action === 'error') {
+      chrome.action.openPopup().catch((err) => {
+        console.debug('openPopup failed:', err?.message || err);
+      });
+    }
   } catch (error) {
     console.error('Failed to send runtime message:', error);
   }
@@ -68,7 +120,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'resetExtractionState') {
-    resetExtractionState().then(() => sendResponse({ status: 'reset' }));
+    resetExtractionState().then((cancelled) => {
+      sendResponse({ status: 'reset', cancelled });
+    });
     return true;
   }
 
@@ -82,6 +136,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function extractAllProperties(propertyLinks) {
   const propertiesData = [];
   const CONCURRENCY_LIMIT = 1;
+
+  currentExtractionContext = {
+    cancelled: false,
+    tabs: new Set()
+  };
 
   await chrome.storage.local.set({ 
     extractionInProgress: true,
@@ -113,6 +172,10 @@ async function extractAllProperties(propertyLinks) {
 
   const launchNext = async () => {
     if (nextIndex >= propertyLinks.length) {
+      return;
+    }
+
+    if (currentExtractionContext?.cancelled) {
       return;
     }
 
@@ -171,6 +234,10 @@ async function extractAllProperties(propertyLinks) {
       );
       results[currentIndex] = data;
     } catch (error) {
+      if (currentExtractionContext?.cancelled) {
+        console.debug('Extraction cancelled while processing', linkData.url);
+        return;
+      }
       console.error(`Error extracting ${linkData.url}:`, error);
       results[currentIndex] = {
         url: linkData.url,
@@ -192,6 +259,10 @@ async function extractAllProperties(propertyLinks) {
         total: propertyLinks.length,
         propertyName: updatedList ? `Processing properties: ${updatedList}` : 'Finalizing results'
       });
+
+      if (currentExtractionContext?.cancelled) {
+        return;
+      }
 
       if (completed < propertyLinks.length) {
         await launchNext();
@@ -237,25 +308,40 @@ async function extractAllProperties(propertyLinks) {
     }
   }
 
-  propertiesData.push(...results.filter(Boolean));
+  const wasCancelled = currentExtractionContext?.cancelled;
 
-  // Generate the LLM prompt
-  const prompt = generateLLMPrompt(propertiesData);
-  
-  // Store the prompt and clear progress state
-  await chrome.storage.local.set({ 
-    analysisPrompt: prompt,
-    extractionInProgress: false,
-    currentProperty: 0,
-    totalProperties: 0,
-    lastExtractionTotal: propertyLinks.length
-  });
+  if (!wasCancelled) {
+    propertiesData.push(...results.filter(Boolean));
 
-  // Send completion message
-  safeSendRuntimeMessage({
-    action: 'complete',
-    total: propertyLinks.length
-  });
+    const prompt = generateLLMPrompt(propertiesData);
+    
+    await chrome.storage.local.set({ 
+      analysisPrompt: prompt,
+      extractionInProgress: false,
+      currentProperty: 0,
+      totalProperties: 0,
+      lastExtractionTotal: propertyLinks.length
+    });
+
+    safeSendRuntimeMessage({
+      action: 'complete',
+      total: propertyLinks.length
+    });
+  } else {
+    await chrome.storage.local.set({
+      extractionInProgress: false,
+      currentProperty: 0,
+      totalProperties: 0
+    });
+
+    safeSendRuntimeMessage({
+      action: 'error',
+      error: 'Analysis cancelled',
+      total: propertyLinks.length
+    });
+  }
+
+  currentExtractionContext = null;
 }
 
 async function extractPropertyData(url, title, wishlistRating, wishlistReviewCount, positionIndex, totalCount) {
@@ -263,10 +349,15 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
   
   // First, open the main property page to get details
   const mainTab = await chrome.tabs.create({ url: url, active: true });
+  registerContextTab(currentExtractionContext, mainTab.id);
   await focusTab(mainTab.id, true);
   await sleep(3500);
   
   try {
+    if (currentExtractionContext?.cancelled) {
+      throw new Error('Extraction cancelled');
+    }
+
     // Extract basic info from main page
     const mainPageData = await chrome.scripting.executeScript({
       target: { tabId: mainTab.id },
@@ -277,16 +368,24 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
     const propertyData = mainPageData && mainPageData[0] ? mainPageData[0].result : {};
     
     // Close main tab
-    await chrome.tabs.remove(mainTab.id);
+    unregisterContextTab(currentExtractionContext, mainTab.id);
+    await closeTabSafe(mainTab.id);
     
     // Now open reviews page if there are reviews
     if (propertyData.reviewCount && propertyData.reviewCount !== '0') {
+      if (currentExtractionContext?.cancelled) {
+        throw new Error('Extraction cancelled');
+      }
       const reviewsUrl = `https://www.airbnb.co.uk/rooms/${propertyId}/reviews`;
       const reviewsTab = await chrome.tabs.create({ url: reviewsUrl, active: true });
+      registerContextTab(currentExtractionContext, reviewsTab.id);
       await focusTab(reviewsTab.id, true);
       await sleep(4200); // Wait longer for initial load
       
       try {
+        if (currentExtractionContext?.cancelled) {
+          throw new Error('Extraction cancelled');
+        }
         // Scroll to load ALL reviews
         const scrollResult = await chrome.scripting.executeScript({
           target: { tabId: reviewsTab.id },
@@ -315,11 +414,13 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
           propertyData.reviews = reviewsData[0].result;
         }
         
-        await chrome.tabs.remove(reviewsTab.id);
+        unregisterContextTab(currentExtractionContext, reviewsTab.id);
+        await closeTabSafe(reviewsTab.id);
       } catch (error) {
         console.error('Error extracting reviews:', error);
         try {
-          await chrome.tabs.remove(reviewsTab.id);
+          unregisterContextTab(currentExtractionContext, reviewsTab.id);
+          await closeTabSafe(reviewsTab.id);
         } catch (e) {}
       }
     }
@@ -327,7 +428,8 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
     return propertyData;
   } catch (error) {
     try {
-      await chrome.tabs.remove(mainTab.id);
+      unregisterContextTab(currentExtractionContext, mainTab.id);
+      await closeTabSafe(mainTab.id);
     } catch (e) {}
     throw error;
   }
@@ -411,12 +513,15 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
       const ratingLink = document.querySelector('a[href*="/reviews"]');
       if (ratingLink) {
         console.log('Found rating link:', ratingLink.textContent);
-        const ratingText = ratingLink.textContent;
-        const ratingMatch = ratingText.match(/([\d.]+)/);
-        const reviewMatch = ratingText.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-        if (!data.rating && ratingMatch) {
-          applyRating(ratingMatch[1]);
+        const ratingText = ratingLink.textContent.trim();
+        const isPureReviewCount = /^\s*\d{1,4}(?:,\d{3})*\s+reviews?\s*$/i.test(ratingText);
+        if (!isPureReviewCount) {
+          const ratingMatch = ratingText.match(/([\d.]+)/);
+          if (!data.rating && ratingMatch) {
+            applyRating(ratingMatch[1]);
+          }
         }
+        const reviewMatch = ratingText.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
         if (reviewMatch) {
           applyReviewCount(reviewMatch[1]);
         }
@@ -428,7 +533,8 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
         document.querySelector('button[data-testid="pdp-show-all-reviews-button"]'),
         document.querySelector('[data-testid="reviews-tab-panel"] button[data-testid="pdp-show-all-reviews-button"]'),
         document.querySelector('[data-testid="reviews-tab"] button[data-testid="pdp-show-all-reviews-button"]'),
-        document.querySelector('[data-testid="rating-section"]')
+        document.querySelector('[data-testid="rating-section"]'),
+        document.querySelector('[data-section-id="REVIEWS_DEFAULT"] [data-testid="reviews-tab"]')
       ];
 
       let resolvedFromButtons = false;
@@ -442,7 +548,8 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
 
         for (const candidate of candidates) {
           if (!candidate) continue;
-          if (applyReviewCount(candidate)) {
+          const countMatch = candidate.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
+          if (countMatch && applyReviewCount(countMatch[1])) {
             resolvedFromButtons = true;
             break;
           }
@@ -1167,7 +1274,7 @@ function generateLLMPrompt(propertiesData) {
 
   let prompt = `Today is ${formattedDate}.
 
-Before you begin any analysis, ask me to clarify the must-have requirements for this trip (for example: minimum bedrooms, washer/dryer availability, budget range, accessibility needs, preferred neighbourhoods, or other deal-breakers). Wait for my response, then continue with the analysis below.
+You are an assistant that must ask exactly one clarification question before starting a task. After greeting me, ask only: "Do you have any requirements you want me to take into account?" If my answer is sensible, acknowledge it and proceed without asking further follow-ups. Only ask additional questions if my reply is ambiguous or contradictory. Always respect the requirements I name. Relevant requirements might include minimum bedrooms, washer/dryer availability, budget range, accessibility needs, preferred neighbourhoods, or other deal-breakers.
 
 I'm analyzing ${propertiesData.length} Airbnb properties from my wishlist. I need you to carefully review each property's details and reviews, paying special attention to subtle hints and concerns that guests might mention even when giving high ratings. People often soften negative feedback or bury concerns in otherwise positive reviews, especially when the host is friendly.
 
