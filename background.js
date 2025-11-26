@@ -220,6 +220,13 @@ const isWishlistUrl = (url) => {
   return /^https:\/\/www\.airbnb\.(?:co\.uk|com)\/wishlists\//i.test(url);
 };
 
+const isRoomUrl = (url) => {
+  if (typeof url !== 'string') {
+    return false;
+  }
+  return /^https:\/\/www\.airbnb\.(?:co\.uk|com)\/rooms\/\d+/i.test(url);
+};
+
 const convertIconToGrayscale = async (path) => {
   if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
     return null;
@@ -318,7 +325,8 @@ const evaluateTabForAction = async (tab) => {
     return;
   }
   const isWishlist = isWishlistUrl(tab.url || '');
-  await setActionState(isWishlist);
+  const isRoom = isRoomUrl(tab.url || '');
+  await setActionState(isWishlist || isRoom);
 };
 
 const updateActionForTabId = async (tabId) => {
@@ -442,6 +450,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     resetExtractionState().then((cancelled) => {
       sendResponse({ status: 'reset', cancelled });
     });
+    return true;
+  }
+
+  if (message.action === 'extractSingleProperty') {
+    const property = message.property || {};
+    if (!property.url) {
+      sendResponse({ status: 'error', error: 'Missing property URL' });
+      return true;
+    }
+    extractSingleProperty(property).catch((error) => {
+      console.debug('Failed to start single property extraction', error);
+      safeSendRuntimeMessage({
+        action: 'error',
+        error: error?.message || 'Failed to start extraction',
+        total: 1
+      });
+    });
+    sendResponse({ status: 'started' });
     return true;
   }
 
@@ -680,6 +706,130 @@ async function extractAllProperties(rawPropertyLinks) {
       action: 'error',
       error: 'Analysis cancelled',
       total: decoratedLinks.length
+    });
+  }
+
+  currentExtractionContext = null;
+  await persistPropertyCacheIfDirty();
+}
+
+async function extractSingleProperty(rawProperty) {
+  const now = Date.now();
+  await loadPropertyCache();
+  await cleanupExpiredCache(now);
+
+  const normalizedReviewCount = normalizeReviewCountValue(rawProperty.reviewCount);
+  const propertyId = getPropertyIdFromUrl(rawProperty.url);
+  const cached = propertyId ? getCachedPropertyData(propertyId, normalizedReviewCount, now) : null;
+
+  currentExtractionContext = {
+    cancelled: false,
+    tabs: new Set()
+  };
+
+  await chrome.storage.local.set({
+    extractionInProgress: true,
+    currentProperty: 1,
+    totalProperties: 1,
+    lastExtractionTotal: 0,
+    analysisPrompt: null,
+    activePropertyIndices: [1],
+    completedPropertyCount: 0
+  });
+
+  const progressLabel = cached ? 'Using cached data for property 1' : 'Processing property 1 of 1';
+  safeSendRuntimeMessage({
+    action: 'progress',
+    current: '1',
+    total: 1,
+    propertyName: progressLabel
+  });
+
+  let originContext = null;
+  let result = null;
+
+  try {
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab) {
+        originContext = {
+          tabId: activeTab.id,
+          windowId: activeTab.windowId
+        };
+      }
+    } catch (error) {
+      console.debug('Failed to capture origin context for single property', error);
+    }
+
+    if (cached) {
+      result = cached;
+    } else {
+      if (originContext?.tabId) {
+        await focusTab(originContext.tabId, true);
+        await sleep(200);
+      }
+      const staggerDelay = MIN_STAGGER_DELAY_MS + Math.random() * STAGGER_DELAY_JITTER_MS;
+      await sleep(staggerDelay);
+
+      result = await extractPropertyData(
+        rawProperty.url,
+        rawProperty.title,
+        rawProperty.rating,
+        rawProperty.reviewCount,
+        0,
+        1,
+        normalizedReviewCount,
+        propertyId
+      );
+    }
+  } catch (error) {
+    if (currentExtractionContext?.cancelled) {
+      console.debug('Single property extraction cancelled');
+    } else {
+      console.error('Error extracting single property', error);
+    }
+    result = {
+      url: rawProperty.url,
+      title: rawProperty.title || 'Property 1',
+      error: 'Failed to extract data: ' + (error?.message || 'Unknown error')
+    };
+  } finally {
+    if (originContext) {
+      await restoreOriginFocus(originContext);
+    }
+  }
+
+  const wasCancelled = currentExtractionContext?.cancelled;
+
+  if (!wasCancelled) {
+    const prompt = generateSinglePropertyPrompt(result);
+    await chrome.storage.local.set({
+      analysisPrompt: prompt,
+      extractionInProgress: false,
+      currentProperty: 0,
+      totalProperties: 0,
+      lastExtractionTotal: 1,
+      activePropertyIndices: [],
+      completedPropertyCount: 1
+    });
+
+    safeSendRuntimeMessage({
+      action: 'complete',
+      total: 1
+    });
+  } else {
+    await chrome.storage.local.set({
+      extractionInProgress: false,
+      currentProperty: 0,
+      totalProperties: 0,
+      activePropertyIndices: [],
+      completedPropertyCount: 0
+    });
+
+    safeSendRuntimeMessage({
+      action: 'error',
+      error: 'Analysis cancelled',
+      total: 1
     });
   }
 
@@ -1777,6 +1927,71 @@ After analyzing all properties, provide:
     
     prompt += `---\n`;
   });
+
+  return prompt;
+}
+
+function generateSinglePropertyPrompt(property) {
+  const today = new Date();
+  const formattedDate = today.toLocaleDateString('en-GB', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const safeValue = (value) => value || 'N/A';
+  const titleText = property.title ? property.title.trim() : '';
+  const url = property.url ? property.url.trim() : '';
+  const titleLine = url ? `[${titleText || 'This property'}](${url})` : (titleText || 'This property');
+
+  let prompt = `Today is ${formattedDate}.\n\nYou are an assistant that will answer questions about a single Airbnb listing using only the details and guest reviews provided below. Surface risks even if they are hinted softly.\n\n`;
+
+  prompt += `## PROPERTY DETAILS\n\n`;
+  prompt += `**Title**: ${titleLine}\n`;
+  prompt += `**URL**: ${url || 'N/A'}\n`;
+  prompt += `**Overall Rating**: ${property.rating ? `${property.rating} out of 5` : 'N/A'} (${property.reviewCount || 0} reviews)\n\n`;
+
+  if (property.reviewShortfall) {
+    prompt += `⚠️ Reviews may be incomplete (missing last ${property.reviewShortfall}).\n\n`;
+  }
+
+  if (property.error) {
+    prompt += `**Error**: ${property.error}\n\n`;
+    return prompt;
+  }
+
+  if (property.guests || property.bedrooms || property.beds || property.bathrooms) {
+    prompt += `**Capacity & Layout**:\n`;
+    if (property.guests) prompt += `- ${property.guests} guests\n`;
+    if (property.bedrooms) prompt += `- ${property.bedrooms} bedrooms\n`;
+    if (property.beds) prompt += `- ${property.beds} beds\n`;
+    if (property.bathrooms) prompt += `- ${property.bathrooms} bathrooms\n`;
+    prompt += `\n`;
+  }
+
+  if (property.description) {
+    prompt += `**Description**:\n${property.description}\n\n`;
+  }
+
+  if (property.amenities && property.amenities.length > 0) {
+    prompt += `**Amenities**:\n`;
+    property.amenities.forEach((amenity) => {
+      prompt += `${amenity}\n`;
+    });
+    prompt += `\n`;
+  }
+
+  if (property.reviews && property.reviews.length > 0) {
+    prompt += `**Reviews (${property.reviews.length} shown)**:\n\n`;
+    property.reviews.forEach((review, idx) => {
+      prompt += `Review ${idx + 1} - ${safeValue(review.date)}\n`;
+      prompt += `"${safeValue(review.text)}"\n\n`;
+    });
+  } else {
+    prompt += `**Reviews**: No reviews available for this property\n\n`;
+  }
+
+  prompt += `Focus on identifying hidden red flags, patterns in the feedback, and whether reviews are outdated. Use these notes to answer any follow-up questions about this listing.\n`;
 
   return prompt;
 }

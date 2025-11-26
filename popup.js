@@ -13,16 +13,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     copyBtn.style.display = 'none';
   };
 
+  const isWishlistUrl = (url) => typeof url === 'string' && url.includes('/wishlists/');
+  const isRoomUrl = (url) => typeof url === 'string' && /\/rooms\/\d+/i.test(url);
+
   resetStatus();
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  if (!tab?.url?.includes('/wishlists/')) {
-    status.textContent = 'Please navigate to an Airbnb wishlist page first.';
-    status.className = 'error';
-    startBtn.disabled = true;
-    return;
-  }
+  const mode = isWishlistUrl(tab?.url) ? 'wishlist' : (isRoomUrl(tab?.url) ? 'room' : 'unsupported');
 
   const state = await chrome.storage.local.get([
     'extractionInProgress',
@@ -58,6 +56,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateResetVisibility(state);
 
   const updatePropertyCountDisplay = (count) => {
+    if (mode === 'room') {
+      propertyCount.textContent = 'Ready to analyze this listing.';
+      return;
+    }
     if (typeof count === 'number') {
       propertyCount.textContent = `Found ${count} properties in wishlist`;
     } else {
@@ -86,6 +88,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   };
 
+  if (mode === 'room') {
+    const currentPropertyId = getPropertyIdFromUrl(tab?.url);
+    if (currentPropertyId) {
+      currentWishlistPropertyIds.add(currentPropertyId);
+    }
+  }
+
   const updateCompletionState = (totalProcessed) => {
     if (typeof totalProcessed !== 'number' || totalProcessed <= 0) {
       return;
@@ -107,6 +116,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     return '';
   };
 
+  if (mode === 'unsupported') {
+    status.textContent = 'Please open an Airbnb wishlist or room page to start.';
+    status.className = 'error';
+    startBtn.disabled = true;
+    updateResetVisibility(state);
+    return;
+  }
+
+  if (mode === 'room') {
+    updatePropertyCountDisplay();
+  }
+
   if (state.extractionInProgress) {
     startBtn.disabled = true;
     const activeText = formatActiveList(state.completedPropertyCount || 0, state.activePropertyIndices || [], state.totalProperties || state.propertyCount || 0);
@@ -121,11 +142,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateCompletionState(state.lastExtractionTotal);
   }
 
-  if (typeof state.propertyCount === 'number') {
+  if (mode === 'wishlist' && typeof state.propertyCount === 'number') {
     updatePropertyCountDisplay(state.propertyCount);
   }
 
   const refreshWishlistInfo = async (options = {}) => {
+    if (mode !== 'wishlist') {
+      return null;
+    }
     return new Promise((resolve) => {
       chrome.tabs.sendMessage(tab.id, { action: 'getWishlistInfo', includePropertyLinks: Boolean(options?.includeLinks) }, (response) => {
         if (chrome.runtime.lastError) {
@@ -145,7 +169,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   };
 
-  await refreshWishlistInfo({ includeLinks: true });
+  if (mode === 'wishlist') {
+    await refreshWishlistInfo({ includeLinks: true });
+  }
+
+  const startWishlistExtraction = async () => {
+    chrome.tabs.sendMessage(tab.id, { action: 'startExtraction' }, (response) => {
+      if (chrome.runtime.lastError) {
+        status.textContent = 'Error: ' + chrome.runtime.lastError.message;
+        status.className = 'error';
+        startBtn.disabled = false;
+        return;
+      }
+
+      if (!response) {
+        status.textContent = 'Error: no response from content script.';
+        status.className = 'error';
+        startBtn.disabled = false;
+      } else if (response.status === 'busy') {
+        status.textContent = 'Analysis already in progress. Please wait for it to finish.';
+        status.className = 'error';
+        startBtn.disabled = false;
+      }
+    });
+  };
+
+  const startSinglePropertyExtraction = async () => {
+    chrome.runtime.sendMessage({
+      action: 'extractSingleProperty',
+      property: {
+        url: tab.url,
+        title: tab.title || '',
+        rating: '',
+        reviewCount: ''
+      }
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        status.textContent = 'Error: ' + chrome.runtime.lastError.message;
+        status.className = 'error';
+        startBtn.disabled = false;
+        return;
+      }
+
+      if (!response || response.status !== 'started') {
+        status.textContent = response?.error ? `Error: ${response.error}` : 'Error starting analysis.';
+        status.className = 'error';
+        startBtn.disabled = false;
+      }
+    });
+  };
 
   startBtn.addEventListener('click', async () => {
     startBtn.disabled = true;
@@ -154,24 +226,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     status.className = 'info';
 
     try {
-      chrome.tabs.sendMessage(tab.id, { action: 'startExtraction' }, (response) => {
-        if (chrome.runtime.lastError) {
-          status.textContent = 'Error: ' + chrome.runtime.lastError.message;
-          status.className = 'error';
-          startBtn.disabled = false;
-          return;
-        }
-
-        if (!response) {
-          status.textContent = 'Error: no response from content script.';
-          status.className = 'error';
-          startBtn.disabled = false;
-        } else if (response.status === 'busy') {
-          status.textContent = 'Analysis already in progress. Please wait for it to finish.';
-          status.className = 'error';
-          startBtn.disabled = false;
-        }
-      });
+      if (mode === 'wishlist') {
+        await startWishlistExtraction();
+      } else {
+        await startSinglePropertyExtraction();
+      }
 
       chrome.runtime.onMessage.addListener(function listener(message) {
         if (message.action === 'progress') {
@@ -183,7 +242,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           startBtn.disabled = false;
           updateResetVisibility({ analysisPrompt: true, lastExtractionTotal: message.total });
           chrome.runtime.onMessage.removeListener(listener);
-          refreshWishlistInfo({ includeLinks: true });
+          if (mode === 'wishlist') {
+            refreshWishlistInfo({ includeLinks: true });
+          }
         } else if (message.action === 'error') {
           status.textContent = message.error ? `Error: ${message.error}` : 'Error during analysis.';
           status.className = message.error === 'Analysis cancelled' ? 'info' : 'error';
@@ -219,6 +280,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     event.preventDefault();
     try {
       await refreshWishlistInfo({ includeLinks: true });
+      if (mode === 'room' && currentWishlistPropertyIds.size === 0) {
+        const propertyId = getPropertyIdFromUrl(tab?.url);
+        if (propertyId) {
+          currentWishlistPropertyIds.add(propertyId);
+        }
+      }
       const propertyIds = Array.from(currentWishlistPropertyIds);
       let cacheFlushed = false;
 
@@ -228,7 +295,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const hasMatches = propertyIds.some((id) => cacheEntries[id]);
 
         if (hasMatches) {
-          const shouldFlush = window.confirm('Cached property data for this wishlist was found. Do you want to flush it?');
+          const shouldFlush = window.confirm('Cached property data for this wishlist/listing was found. Do you want to flush it?');
           if (shouldFlush) {
             const flushResponse = await new Promise((resolve, reject) => {
               chrome.runtime.sendMessage({ action: 'flushPropertyCache', propertyIds }, (response) => {

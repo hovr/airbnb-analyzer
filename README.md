@@ -38,7 +38,8 @@ Airbnb Wishlist Analyzer is a Chrome extension that gathers details and reviews 
 
 2. **Start the analyzer**
    - Click the Airbnb Wishlist Analyzer icon in the Chrome toolbar.
-   - The popup will show how many properties it found. Click the **Start Analysis** button.
+   - On a wishlist page the popup shows how many properties it found. Click **Start Analysis** to process the whole list.
+   - On an individual property page (`/rooms/...`) you can also click **Start Analysis** to build a single-listing prompt using that page’s reviews and amenities.
    - The extension opens **one** property tab at a time and must stay visible while it works. Do not switch that tab away or close it until the run finishes; doing so can interrupt review collection.
    - The extension automatically collects details, scrolls through reviews, and then closes the property tab before moving to the next one. This may take several minutes depending on how many properties you have.
 
@@ -55,6 +56,7 @@ Airbnb Wishlist Analyzer is a Chrome extension that gathers details and reviews 
 - **Smart caching & reset control** – The extension caches detailed property data to avoid reloading reviews unnecessarily. When you reset the analyzer, you’ll see a prompt asking whether to flush the cache for the wishlist you’re viewing, so you can decide between speed and freshness.
 - **Clear tab labels** – While reviews load, each property tab automatically updates its browser tab label to show the property number and how many reviews have been processed (for example, `#3 12/15 reviews`). This makes it easy to see progress at a glance.
 - **Icon state awareness** – The extension icon now turns monochrome and opens a simple “You need to be on an Airbnb wishlist page” message if you activate it outside an eligible wishlist. Head to a wishlist to restore the full popup.
+- **Single listing mode** – You can run the analyzer directly from an Airbnb room page to generate a focused prompt for just that listing, reusing the same review and amenity scraping pipeline.
 
 ## Troubleshooting tips
 
