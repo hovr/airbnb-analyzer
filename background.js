@@ -888,10 +888,19 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
           throw new Error('Extraction cancelled');
         }
         // Scroll to load ALL reviews
+        const targetReviewTotal = (() => {
+          const fromExpected = Number.isFinite(propertyData.expectedReviewCount) ? propertyData.expectedReviewCount : null;
+          const normalizedCount = normalizeReviewCountValue(propertyData.reviewCount);
+          const chosen = fromExpected || normalizedCount;
+          if (!chosen || chosen > 5000) {
+            return null;
+          }
+          return chosen;
+        })();
         const scrollResult = await chrome.scripting.executeScript({
           target: { tabId: reviewsTab.id },
           func: scrollAndLoadAllReviews,
-          args: [Number.parseInt(propertyData.reviewCount, 10) || null, positionIndex + 1, totalCount]
+          args: [targetReviewTotal, positionIndex + 1, totalCount]
         });
         
         const scrollInfo = scrollResult && scrollResult[0] ? scrollResult[0].result : null;
@@ -956,9 +965,36 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
   };
 
   try {
+    const parseReviewCountFromText = (text) => {
+      if (!text) {
+        return null;
+      }
+      const combo = text.match(/[0-9]\.\d{1,2}\s*[·,]\s*(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
+      if (combo) {
+        const digits = combo[1].replace(/,/g, '');
+        const parsedCombo = Number.parseInt(digits, 10);
+        if (Number.isFinite(parsedCombo)) {
+          return parsedCombo;
+        }
+      }
+      const reviewMatch = text.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
+      if (reviewMatch) {
+        const digits = reviewMatch[1].replace(/,/g, '');
+        const parsedReview = Number.parseInt(digits, 10);
+        if (Number.isFinite(parsedReview)) {
+          return parsedReview;
+        }
+      }
+      return null;
+    };
+
     const normalizeCount = (value) => {
       if (value === undefined || value === null) {
         return null;
+      }
+      const fromText = parseReviewCountFromText(String(value));
+      if (Number.isFinite(fromText)) {
+        return fromText;
       }
       const digits = value.toString().replace(/[^0-9]/g, '');
       if (!digits) {
@@ -1020,14 +1056,14 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
         const ratingText = ratingLink.textContent.trim();
         const isPureReviewCount = /^\s*\d{1,4}(?:,\d{3})*\s+reviews?\s*$/i.test(ratingText);
         if (!isPureReviewCount) {
-          const ratingMatch = ratingText.match(/([\d.]+)/);
+          const ratingMatch = ratingText.match(/([0-9]\.\d{1,2})/);
           if (!data.rating && ratingMatch) {
             applyRating(ratingMatch[1]);
           }
         }
-        const reviewMatch = ratingText.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-        if (reviewMatch) {
-          applyReviewCount(reviewMatch[1]);
+        const reviewFromText = parseReviewCountFromText(ratingText);
+        if (Number.isFinite(reviewFromText)) {
+          applyReviewCount(reviewFromText);
         }
       }
     }
@@ -1248,8 +1284,13 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
         continue;
       }
       const reviewMatch = textContent.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-      const normalised = reviewMatch ? reviewMatch[1].replace(/,/g, '') : textContent.replace(/[^0-9]/g, '');
+      const comboMatch = textContent.match(/[0-9]\.\d{1,2}\s*[·,]\s*(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
+      const preferred = comboMatch?.[1] || reviewMatch?.[1] || '';
+      const normalised = preferred ? preferred.replace(/,/g, '') : textContent.replace(/[^0-9]/g, '');
       if (!normalised) {
+        continue;
+      }
+      if (normalised.length > 4 && !preferred) {
         continue;
       }
       const parsed = Number.parseInt(normalised, 10);
