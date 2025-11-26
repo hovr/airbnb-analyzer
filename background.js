@@ -1630,7 +1630,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
       noGrowthCycles += 1;
       plateauCycles += 1;
       stagnantMovementCycles = anyMoved ? 0 : stagnantMovementCycles + 1;
-      if (plateauCycles >= 15) {
+      if (plateauCycles >= 30) {
         console.warn('No new reviews after repeated cycles, treating as complete');
         expected = currentCount || expected || null;
         break;
