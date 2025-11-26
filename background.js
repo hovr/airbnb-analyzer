@@ -1635,7 +1635,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
         expected = currentCount || expected || null;
         break;
       }
-      if (noGrowthCycles >= 15) {
+      if (noGrowthCycles >= 30) {
         console.warn('No new reviews after multiple cycles, treating as complete');
         if (!expected || currentCount >= expected - 1) {
           expected = currentCount;
