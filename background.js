@@ -1366,8 +1366,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     return Boolean(dialogReady());
   };
 
-  const seenReviewIds = new Set();
-  const seenReviewNodes = new Set();
+  const seenReviewKeys = new Set();
   let expected = Number.isFinite(expectedTotal) && expectedTotal > 0 ? expectedTotal : null;
   if (!expected) {
     try {
@@ -1400,13 +1399,18 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     );
     reviewNodes.forEach(node => {
       const reviewId = node.getAttribute('data-review-id') || node.id;
-      if (reviewId) {
-        seenReviewIds.add(reviewId);
-      } else {
-        seenReviewNodes.add(node);
+      let key = reviewId;
+      if (!key) {
+        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (text && text.length >= 30 && /[A-Za-z]/.test(text)) {
+          key = text.slice(0, 120);
+        }
+      }
+      if (key) {
+        seenReviewKeys.add(key);
       }
     });
-    return seenReviewIds.size + seenReviewNodes.size;
+    return seenReviewKeys.size;
   };
 
   const getScrollableTargets = () => {
