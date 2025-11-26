@@ -1537,6 +1537,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   let stallLoops = 0;
   let noGrowthCycles = 0;
   let plateauCycles = 0;
+  let stagnantMovementCycles = 0;
 
   console.log('Starting review loading with expected total:', expected || 'unknown');
 
@@ -1621,22 +1622,29 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
       stallLoops = 0;
       noGrowthCycles = 0;
       plateauCycles = 0;
+      stagnantMovementCycles = 0;
       lastCount = currentCount;
     } else {
       idleCycles += 1;
       stallLoops += 1;
       noGrowthCycles += 1;
       plateauCycles += 1;
-      if (plateauCycles >= 5) {
+      stagnantMovementCycles = anyMoved ? 0 : stagnantMovementCycles + 1;
+      if (plateauCycles >= 15) {
         console.warn('No new reviews after repeated cycles, treating as complete');
         expected = currentCount || expected || null;
         break;
       }
-      if (noGrowthCycles >= 5) {
+      if (noGrowthCycles >= 15) {
         console.warn('No new reviews after multiple cycles, treating as complete');
         if (!expected || currentCount >= expected - 1) {
           expected = currentCount;
         }
+        break;
+      }
+      if (stagnantMovementCycles >= 5) {
+        console.warn('No scroll movement detected over multiple cycles, treating as complete');
+        expected = currentCount || expected || null;
         break;
       }
       if (idleCycles > MAX_IDLE_CYCLES) {
