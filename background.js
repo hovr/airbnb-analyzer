@@ -1482,6 +1482,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   const MAX_IDLE_CYCLES = expected ? Math.min(24, Math.max(10, Math.ceil(expected / 8))) : 15;
   const MAX_SCROLL_CYCLES = expected ? Math.max(60, Math.ceil(expected * 1.5)) : 60;
   let stallLoops = 0;
+  let noGrowthCycles = 0;
 
   console.log('Starting review loading with expected total:', expected || 'unknown');
 
@@ -1559,10 +1560,19 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     if (currentCount > lastCount || anyMoved) {
       idleCycles = 0;
       stallLoops = 0;
+      noGrowthCycles = 0;
       lastCount = currentCount;
     } else {
       idleCycles += 1;
       stallLoops += 1;
+      noGrowthCycles += 1;
+      if (noGrowthCycles >= 5) {
+        console.warn('No new reviews after multiple cycles, treating as complete');
+        if (!expected || currentCount >= expected - 1) {
+          expected = currentCount;
+        }
+        break;
+      }
       if (idleCycles > MAX_IDLE_CYCLES) {
         break;
       }
