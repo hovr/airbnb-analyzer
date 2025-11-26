@@ -1367,6 +1367,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   };
 
   const seenReviewKeys = new Set();
+  let reachedExpectedCycles = 0;
   let expected = Number.isFinite(expectedTotal) && expectedTotal > 0 ? expectedTotal : null;
   if (!expected) {
     try {
@@ -1394,16 +1395,22 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   };
 
   const collectReviews = () => {
-    const reviewNodes = document.querySelectorAll(
-      '[data-review-id], [data-section-id="REVIEWS_DEFAULT"] [role="listitem"], [data-testid="reviews-tab-panel"] [role="listitem"]'
-    );
+    let reviewNodes = Array.from(document.querySelectorAll('[data-review-id]'));
+    if (!reviewNodes.length) {
+      const container = document.querySelector('[data-section-id="REVIEWS_DEFAULT"]') || document.querySelector('[data-testid="reviews-tab-panel"]') || document;
+      reviewNodes = Array.from(container.querySelectorAll('[role="listitem"]')).filter((node) => {
+        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        return text.length >= 60 && /[A-Za-z]/.test(text);
+      });
+    }
+
     reviewNodes.forEach(node => {
       const reviewId = node.getAttribute('data-review-id') || node.id;
       let key = reviewId;
       if (!key) {
         const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
-        if (text && text.length >= 30 && /[A-Za-z]/.test(text)) {
-          key = text.slice(0, 120);
+        if (text && text.length >= 60 && /[A-Za-z]/.test(text)) {
+          key = text.slice(0, 160);
         }
       }
       if (key) {
@@ -1599,9 +1606,14 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     updateTitle(currentCount, 'reviews processed');
     console.log(`Cycle ${cycle}: seen ${currentCount} reviews (expected ${expected || 'unknown'})`);
 
-    if (expected && currentCount >= expected) {
-      console.log('Reached expected review total');
-      break;
+    if (expected && currentCount >= expected && currentCount <= expected + 3) {
+      reachedExpectedCycles += 1;
+      if (reachedExpectedCycles >= 2) {
+        console.log('Reached expected review total');
+        break;
+      }
+    } else {
+      reachedExpectedCycles = 0;
     }
 
     if (currentCount > lastCount) {
