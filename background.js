@@ -30,7 +30,26 @@ const normalizeReviewCountValue = (value) => {
   if (value === undefined || value === null) {
     return null;
   }
-  const digits = String(value).replace(/[^0-9]/g, '');
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  const reviewPatterns = [
+    /\b(?:from|show all|all)\s+(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+    /\b[0-5](?:\.\d{1,2})?\s+out of\s+5(?:\s+stars?)?\.?\s*[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+    /\b[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+    /\b(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i
+  ];
+
+  for (const pattern of reviewPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const parsed = Number.parseInt(match[1].replace(/,/g, ''), 10);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+  }
+
+  if (!/^\d{1,4}(?:,\d{3})*$/.test(text)) {
+    return null;
+  }
+  const digits = text.replace(/,/g, '');
   if (!digits) {
     return null;
   }
@@ -909,19 +928,51 @@ async function extractPropertyData(url, title, wishlistRating, wishlistReviewCou
           if (scrollInfo.gaveUp && scrollInfo.missing > 0) {
             propertyData.reviewShortfall = scrollInfo.missing;
           }
+          if (Array.isArray(scrollInfo.reviews) && scrollInfo.reviews.length > 0) {
+            propertyData.reviews = scrollInfo.reviews;
+          }
         }
 
         // Wait for reviews to load
         await sleep(3000);
         
-        // Extract reviews
+        // Supplement the scroll-pass accumulator with the final DOM slice.
+        // Airbnb virtualizes older review nodes, so neither source is enough
+        // on every listing by itself.
         const reviewsData = await chrome.scripting.executeScript({
           target: { tabId: reviewsTab.id },
           func: extractReviewsOnly
         });
         
-        if (reviewsData && reviewsData[0] && reviewsData[0].result) {
-          propertyData.reviews = reviewsData[0].result;
+        if (reviewsData && reviewsData[0] && Array.isArray(reviewsData[0].result)) {
+          const mergedReviews = [];
+          const seenReviewTexts = new Set();
+          const addReview = (review) => {
+            const text = (review?.text || '').replace(/\s+/g, ' ').trim();
+            if (!text) {
+              return;
+            }
+            const date = (review?.date || '').replace(/\s+/g, ' ').trim();
+            const key = text
+              .toLowerCase()
+              .replace(/[^\p{L}\p{N}]+/gu, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 260);
+            if (seenReviewTexts.has(key)) {
+              return;
+            }
+            seenReviewTexts.add(key);
+            mergedReviews.push({
+              text,
+              rating: review.rating || 'N/A',
+              date
+            });
+          };
+
+          (Array.isArray(propertyData.reviews) ? propertyData.reviews : []).forEach(addReview);
+          reviewsData[0].result.forEach(addReview);
+          propertyData.reviews = mergedReviews;
         }
         
         unregisterContextTab(currentExtractionContext, reviewsTab.id);
@@ -969,6 +1020,24 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
       if (!text) {
         return null;
       }
+      const normalized = String(text).replace(/\s+/g, ' ').trim();
+      const explicitPatterns = [
+        /\b(?:from|show all|all)\s+(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+        /\b[0-5](?:\.\d{1,2})?\s+out of\s+5(?:\s+stars?)?\.?\s*[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+        /\b[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i
+      ];
+
+      for (const pattern of explicitPatterns) {
+        const match = normalized.match(pattern);
+        if (!match) {
+          continue;
+        }
+        const parsed = Number.parseInt(match[1].replace(/,/g, ''), 10);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+
       const combo = text.match(/[0-9]\.\d{1,2}\s*[·,]\s*(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
       if (combo) {
         const digits = combo[1].replace(/,/g, '');
@@ -1088,8 +1157,8 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
 
         for (const candidate of candidates) {
           if (!candidate) continue;
-          const countMatch = candidate.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-          if (countMatch && applyReviewCount(countMatch[1])) {
+          const parsedCount = parseReviewCountFromText(candidate);
+          if (Number.isFinite(parsedCount) && applyReviewCount(parsedCount)) {
             resolvedFromButtons = true;
             break;
           }
@@ -1125,8 +1194,8 @@ function extractMainPageData(wishlistTitle, wishlistRating, wishlistReviewCount)
             if (!candidate) {
               continue;
             }
-            const countMatch = candidate.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-            if (countMatch && applyReviewCount(countMatch[1])) {
+            const parsedCount = parseReviewCountFromText(candidate);
+            if (Number.isFinite(parsedCount) && applyReviewCount(parsedCount)) {
               return;
             }
           }
@@ -1283,16 +1352,23 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
       if (!textContent) {
         continue;
       }
-      const reviewMatch = textContent.match(/(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-      const comboMatch = textContent.match(/[0-9]\.\d{1,2}\s*[·,]\s*(\d{1,4}(?:,\d{3})*)\s+reviews?/i);
-      const preferred = comboMatch?.[1] || reviewMatch?.[1] || '';
-      const normalised = preferred ? preferred.replace(/,/g, '') : textContent.replace(/[^0-9]/g, '');
-      if (!normalised) {
-        continue;
+      const normalizedText = textContent.replace(/\s+/g, ' ').trim();
+      const patterns = [
+        /\b(?:from|show all|all)\s+(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+        /\b[0-5](?:\.\d{1,2})?\s+out of\s+5(?:\s+stars?)?\.?\s*[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+        /\b[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+        /\b(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i
+      ];
+
+      let normalised = '';
+      for (const pattern of patterns) {
+        const match = normalizedText.match(pattern);
+        if (match) {
+          normalised = match[1].replace(/,/g, '');
+          break;
+        }
       }
-      if (normalised.length > 4 && !preferred) {
-        continue;
-      }
+      if (!normalised) continue;
       const parsed = Number.parseInt(normalised, 10);
       if (Number.isFinite(parsed) && parsed > 0 && parsed <= 5000) {
         return parsed;
@@ -1394,10 +1470,191 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     }
   };
 
+  const selectBestReviewText = (spanNodes, root = null) => {
+    const candidates = [];
+
+    const addCandidate = (node, text, options = {}) => {
+      const cleaned = (text || '').replace(/\s+/g, ' ').trim();
+      if (!cleaned) {
+        return;
+      }
+      const lower = cleaned.toLowerCase();
+      if (
+        lower.includes('show more') ||
+        lower.includes('show original') ||
+        lower.includes('translated') ||
+        lower.includes('years on airbnb') ||
+        lower.includes('reviews') ||
+        /^stars?\s*,/i.test(cleaned)
+      ) {
+        return;
+      }
+      if (cleaned.length < 12 || !/[A-Za-z]/.test(cleaned)) {
+        return;
+      }
+
+      candidates.push({
+        text: cleaned,
+        length: cleaned.length,
+        hasChild: Boolean(options.hasChild),
+        fromLeaf: Boolean(options.fromLeaf)
+      });
+    };
+
+    spanNodes.forEach(span => {
+      const text = span.textContent.trim();
+      if (span.children.length > 1) {
+        return;
+      }
+      addCandidate(span, text, {
+        hasChild: span.children.length > 0,
+        fromLeaf: span.children.length === 0
+      });
+    });
+
+    if (root) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+          const parent = node.parentElement;
+          if (!parent || parent.closest('button,a,script,style')) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+          if (text.length < 12 || !/[A-Za-z]/.test(text)) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+
+      let current = walker.nextNode();
+      while (current) {
+        addCandidate(current.parentElement, current.textContent, { fromLeaf: true });
+        current = walker.nextNode();
+      }
+    }
+
+    const reviewMetadataPattern = /^(?:[A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}'’-]+)?|[\p{L}\s,.-]+|\d+\s+years?\s+on\s+Airbnb|[★\s·]+|(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4}|\d+\s+(?:day|week|month|year)s?\s+ago|Stayed\s+.+)$/iu;
+    const filteredCandidates = candidates.filter(candidate => {
+      if (candidate.length >= 40) {
+        return true;
+      }
+      return !reviewMetadataPattern.test(candidate.text);
+    });
+
+    const usableCandidates = filteredCandidates.length ? filteredCandidates : candidates;
+
+    if (!usableCandidates.length) {
+      return '';
+    }
+
+    const scoreForLength = (length) => {
+      if (length >= 300) return 3;
+      if (length >= 120) return 2;
+      if (length >= 40) return 1;
+      return 0;
+    };
+
+    usableCandidates.sort((a, b) => {
+      const scoreDiff = scoreForLength(b.length) - scoreForLength(a.length);
+      if (scoreDiff !== 0) return scoreDiff;
+      if (a.fromLeaf !== b.fromLeaf) return a.fromLeaf ? -1 : 1;
+      if (b.length !== a.length) return b.length - a.length;
+      return a.hasChild ? 1 : -1;
+    });
+
+    return usableCandidates[0].text;
+  };
+
+  const readReviewDate = (root) => {
+    if (!root) {
+      return '';
+    }
+
+    const metadataText = Array.from(root.querySelectorAll('span, div'))
+      .map(node => (node.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(text => text && text.length <= 80)
+      .join(' · ');
+
+    const text = metadataText || (root.textContent || '').replace(/\s+/g, ' ').trim();
+    const isoEmbedded = text.match(/\b\d{4}-\d{2}-\d{2}\b/);
+    if (isoEmbedded) {
+      const parsed = new Date(isoEmbedded[0]);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString('en-GB', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+      }
+      return isoEmbedded[0];
+    }
+
+    const stayedIn = text.match(/\bStayed in\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i);
+    if (stayedIn) {
+      return stayedIn[0];
+    }
+
+    const monthYear = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i);
+    if (monthYear) {
+      return monthYear[0];
+    }
+
+    const shortMonthYear = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4}\b/i);
+    if (shortMonthYear) {
+      return shortMonthYear[0].replace(/\./g, '');
+    }
+
+    const relativeDate = text.match(/\b\d+\s+(?:day|week|month|year)s?\s+ago\b/i);
+    if (relativeDate) {
+      return relativeDate[0];
+    }
+
+    return '';
+  };
+
+  const capturedReviews = new Map();
+
+  const extractReviewTextFromRaw = (root) => {
+    const raw = (root?.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!raw) {
+      return '';
+    }
+
+    const stayMarkers = [
+      'Stayed for a full month',
+      'Stayed over a week',
+      'Stayed about a week',
+      'Stayed one night',
+      'Stayed with kids',
+      'Group trip'
+    ];
+
+    let startIndex = -1;
+    let markerLength = 0;
+    stayMarkers.forEach(marker => {
+      const index = raw.lastIndexOf(marker);
+      if (index > startIndex) {
+        startIndex = index;
+        markerLength = marker.length;
+      }
+    });
+
+    let text = startIndex >= 0 ? raw.slice(startIndex + markerLength) : raw;
+    text = text
+      .replace(/Translated\s+Show original.*$/i, '')
+      .replace(/Show original.*$/i, '')
+      .replace(/\bResponse from .+$/i, '')
+      .replace(/\bRating,\s*\d+\s+stars?,\s*·\s*/i, '')
+      .trim();
+
+    return text.length >= 8 && /[A-Za-z]/.test(text) ? text : '';
+  };
+
   const collectReviews = () => {
     let reviewNodes = Array.from(document.querySelectorAll('[data-review-id]'));
     if (!reviewNodes.length) {
-      const container = document.querySelector('[data-section-id="REVIEWS_DEFAULT"]') || document.querySelector('[data-testid="reviews-tab-panel"]') || document;
+      const container = document.querySelector('[role="dialog"]') || document.querySelector('[data-section-id="REVIEWS_DEFAULT"]') || document.querySelector('[data-testid="reviews-tab-panel"]') || document;
       reviewNodes = Array.from(container.querySelectorAll('[role="listitem"]')).filter((node) => {
         const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
         return text.length >= 60 && /[A-Za-z]/.test(text);
@@ -1407,29 +1664,60 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     reviewNodes.forEach(node => {
       const reviewId = node.getAttribute('data-review-id') || node.id;
       let key = reviewId;
+      const text = extractReviewTextFromRaw(node) || selectBestReviewText(Array.from(node.querySelectorAll('span')), node);
       if (!key) {
-        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
-        if (text && text.length >= 60 && /[A-Za-z]/.test(text)) {
-          key = text.slice(0, 160);
+        const keyText = text || (node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (keyText && keyText.length >= 20 && /[A-Za-z]/.test(keyText)) {
+          key = keyText.slice(0, 180);
         }
       }
       if (key) {
         seenReviewKeys.add(key);
+        if (text && !capturedReviews.has(key)) {
+          capturedReviews.set(key, {
+            text,
+            rating: 'N/A',
+            date: readReviewDate(node)
+          });
+        }
       }
     });
-    return seenReviewKeys.size;
+    return capturedReviews.size;
   };
 
   const getScrollableTargets = () => {
     const targets = [];
+    const addWithAncestors = (node) => {
+      let current = node;
+      while (current && current !== document) {
+        targets.push(current);
+        current = current.parentElement;
+      }
+    };
 
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog) {
+      const rect = dialog.getBoundingClientRect();
+      const points = [
+        [rect.left + rect.width * 0.5, rect.top + rect.height * 0.78],
+        [rect.left + rect.width * 0.5, rect.top + rect.height * 0.9],
+        [rect.left + rect.width * 0.78, rect.top + rect.height * 0.82],
+        [window.innerWidth * 0.5, window.innerHeight * 0.88]
+      ];
+
+      points.forEach(([x, y]) => {
+        document.elementsFromPoint(x, y).forEach(addWithAncestors);
+      });
+
       const modalSpecific = dialog.querySelector('div._17itzz4');
       if (modalSpecific) {
         targets.push(modalSpecific);
       }
       targets.push(...dialog.querySelectorAll('[style*="overflow"]'));
+      targets.push(...Array.from(dialog.querySelectorAll('*')).filter(el => {
+        const style = window.getComputedStyle(el);
+        return /(auto|scroll)/i.test(style.overflowY) && el.scrollHeight > el.clientHeight + 80;
+      }));
     }
 
     const selectors = [
@@ -1450,7 +1738,16 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
 
     targets.push(document.scrollingElement, document.body, document.documentElement);
 
-    return dedupe(targets.filter(Boolean));
+    return dedupe(targets.filter(Boolean)).filter(el => {
+      if (el === document.body || el === document.documentElement || el === document.scrollingElement) {
+        return true;
+      }
+      return (el.scrollHeight || 0) > (el.clientHeight || 0) + 20;
+    }).sort((a, b) => {
+      const aRoom = Math.max(0, (a.scrollHeight || 0) - (a.clientHeight || 0));
+      const bRoom = Math.max(0, (b.scrollHeight || 0) - (b.clientHeight || 0));
+      return bRoom - aRoom;
+    });
   };
 
   const scrollElement = (element, direction = 1) => {
@@ -1471,13 +1768,23 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
         return;
       }
       const deltaFactor = Math.max(0.2, Math.min(1, Math.abs(direction))) * Math.sign(direction || 1);
-      const deltaWindow = deltaFactor * Math.max(600, window.innerHeight || 800);
+      const deltaWindow = deltaFactor * Math.max(650, (window.innerHeight || 800) * 0.85);
+      try {
+        element.dispatchEvent(new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaY: deltaWindow,
+          deltaMode: 0
+        }));
+      } catch (error) {
+        console.debug('Wheel event dispatch failed', error);
+      }
       if (element === window || element === document.body || element === document.documentElement) {
         window.scrollBy(0, deltaWindow);
       } else if (typeof element.scrollBy === 'function') {
-        element.scrollBy({ top: deltaFactor * element.clientHeight * 0.9, behavior: 'auto' });
+        element.scrollBy({ top: deltaFactor * Math.max(650, element.clientHeight * 0.85), behavior: 'auto' });
       } else if (typeof element.scrollTop === 'number') {
-        const delta = deltaFactor * element.clientHeight * 0.9;
+        const delta = deltaFactor * Math.max(650, element.clientHeight * 0.85);
         const next = element.scrollTop + delta;
         if (delta >= 0) {
           element.scrollTop = Math.min(next, element.scrollHeight);
@@ -1509,6 +1816,22 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     await wait(400);
     const retry = scrollElement(element, 1);
     return Boolean(retry && retry.moved);
+  };
+
+  const resetScrollableTargetsToTop = async () => {
+    const targets = getScrollableTargets();
+    targets.forEach(target => {
+      if (target === window || target === document.body || target === document.documentElement) {
+        window.scrollTo(0, 0);
+      } else if (typeof target.scrollTo === 'function') {
+        target.scrollTo({ top: 0, behavior: 'auto' });
+      } else if (typeof target.scrollTop === 'number') {
+        target.scrollTop = 0;
+      }
+      target.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await wait(900);
+    collectReviews();
   };
 
   const tryClickLoadMore = () => {
@@ -1552,8 +1875,12 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
 
   let gaveUpEarly = false;
 
+  await resetScrollableTargetsToTop();
+  lastCount = collectReviews();
+
   for (let cycle = 1; cycle <= MAX_SCROLL_CYCLES; cycle += 1) {
     await ensureReviewsContainerOpen();
+    collectReviews();
 
     const targets = getScrollableTargets();
     if (!targets.length) {
@@ -1591,9 +1918,9 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     const clicked = tryClickLoadMore();
 
     if (clicked) {
-      await wait(anyMoved ? 400 : 2400);
+      await wait(anyMoved ? 1000 : 2400);
     } else {
-      await wait(anyMoved ? 100 : 600);
+      await wait(anyMoved ? 800 : 1000);
     }
 
     if (!expected || !Number.isFinite(expected)) {
@@ -1658,7 +1985,33 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     }
   }
 
-  const finalCount = collectReviews();
+  if (expected && capturedReviews.size < expected) {
+    console.log('Running second review capture pass', { expected, captured: capturedReviews.size });
+    await resetScrollableTargetsToTop();
+    let secondPassStalls = 0;
+    const secondPassLimit = Math.max(40, expected * 3);
+
+    for (let cycle = 1; cycle <= secondPassLimit && capturedReviews.size < expected; cycle += 1) {
+      const beforeCount = capturedReviews.size;
+      const targets = getScrollableTargets();
+      const movementAttempts = await Promise.all(targets.map(ensureMovementOrRetry));
+      await wait(1000);
+      collectReviews();
+
+      if (capturedReviews.size > beforeCount) {
+        secondPassStalls = 0;
+      } else {
+        secondPassStalls += 1;
+      }
+
+      if (!movementAttempts.some(Boolean) || secondPassStalls >= 10) {
+        break;
+      }
+    }
+  }
+
+  collectReviews();
+  const finalCount = capturedReviews.size;
   const missing = expected ? Math.max(0, expected - finalCount) : 0;
   if (missing > 0 && (gaveUpEarly || finalCount < expected)) {
     updateTitle(finalCount, 'reviews processed (incomplete)');
@@ -1672,7 +2025,8 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     count: finalCount,
     expected,
     missing,
-    gaveUp: missing > 0 && (gaveUpEarly || finalCount < expected)
+    gaveUp: missing > 0 && (gaveUpEarly || finalCount < expected),
+    reviews: Array.from(capturedReviews.values())
   };
 }
 
@@ -1689,25 +2043,82 @@ function extractReviewsOnly() {
     
     // Fallback: look in reviews section
     if (reviewElements.length === 0) {
-      const reviewsSection = document.querySelector('[data-section-id="REVIEWS_DEFAULT"]');
+      const reviewsSection = document.querySelector('[role="dialog"]') || document.querySelector('[data-section-id="REVIEWS_DEFAULT"]') || document.querySelector('[data-testid="reviews-tab-panel"]');
       if (reviewsSection) {
         reviewElements = reviewsSection.querySelectorAll('div[role="listitem"]');
         console.log('Found reviews in section:', reviewElements.length);
       }
     }
+
+    const extractReviewTextFromRaw = (root) => {
+      const raw = (root?.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!raw) {
+        return '';
+      }
+
+      const stayMarkers = [
+        'Stayed for a full month',
+        'Stayed over a week',
+        'Stayed about a week',
+        'Stayed one night',
+        'Stayed with kids',
+        'Group trip'
+      ];
+
+      let startIndex = -1;
+      let markerLength = 0;
+      stayMarkers.forEach(marker => {
+        const index = raw.lastIndexOf(marker);
+        if (index > startIndex) {
+          startIndex = index;
+          markerLength = marker.length;
+        }
+      });
+
+      let text = startIndex >= 0 ? raw.slice(startIndex + markerLength) : raw;
+      text = text
+        .replace(/Translated\s+Show original.*$/i, '')
+        .replace(/Show original.*$/i, '')
+        .replace(/\bResponse from .+$/i, '')
+        .replace(/\bRating,\s*\d+\s+stars?,\s*·\s*/i, '')
+        .trim();
+
+      return text.length >= 8 && /[A-Za-z]/.test(text) ? text : '';
+    };
     
-    const selectBestReviewText = (spanNodes) => {
+    const selectBestReviewText = (spanNodes, root = null) => {
       const candidates = [];
 
+      const addCandidate = (text, options = {}) => {
+        const cleaned = (text || '').replace(/\s+/g, ' ').trim();
+        if (!cleaned) {
+          return;
+        }
+        const lower = cleaned.toLowerCase();
+        if (
+          lower.includes('show more') ||
+          lower.includes('show original') ||
+          lower.includes('translated') ||
+          lower.includes('years on airbnb') ||
+          lower.includes('reviews') ||
+          /^stars?\s*,/i.test(cleaned)
+        ) {
+          return;
+        }
+        if (cleaned.length < 12 || !/[A-Za-z]/.test(cleaned)) {
+          return;
+        }
+
+        candidates.push({
+          text: cleaned,
+          length: cleaned.length,
+          depth: options.depth || 0,
+          hasChild: Boolean(options.hasChild),
+          fromLeaf: Boolean(options.fromLeaf)
+        });
+      };
+
       spanNodes.forEach(span => {
-        const text = span.textContent.trim();
-        if (!text) {
-          return;
-        }
-        const lower = text.toLowerCase();
-        if (lower.includes('show more') || lower.includes('show original') || lower.includes('translated')) {
-          return;
-        }
         if (span.children.length > 1) {
           return;
         }
@@ -1719,15 +2130,45 @@ function extractReviewsOnly() {
           current = current.parentElement;
         }
 
-        candidates.push({
-          text,
-          length: text.length,
+        addCandidate(span.textContent, {
           depth,
-          hasChild: span.children.length > 0
+          hasChild: span.children.length > 0,
+          fromLeaf: span.children.length === 0
         });
       });
 
-      if (candidates.length === 0) {
+      if (root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode: (node) => {
+            const parent = node.parentElement;
+            if (!parent || parent.closest('button,a,script,style')) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+            if (text.length < 12 || !/[A-Za-z]/.test(text)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
+
+        let current = walker.nextNode();
+        while (current) {
+          addCandidate(current.textContent, { fromLeaf: true });
+          current = walker.nextNode();
+        }
+      }
+
+      const reviewMetadataPattern = /^(?:[A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}'’-]+)?|[\p{L}\s,.-]+|\d+\s+years?\s+on\s+Airbnb|[★\s·]+|(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4}|\d+\s+(?:day|week|month|year)s?\s+ago|Stayed\s+.+)$/iu;
+      const filteredCandidates = candidates.filter(candidate => {
+        if (candidate.length >= 40) {
+          return true;
+        }
+        return !reviewMetadataPattern.test(candidate.text);
+      });
+      const usableCandidates = filteredCandidates.length ? filteredCandidates : candidates;
+
+      if (usableCandidates.length === 0) {
         return '';
       }
 
@@ -1738,15 +2179,16 @@ function extractReviewsOnly() {
         return 0;
       };
 
-      candidates.sort((a, b) => {
+      usableCandidates.sort((a, b) => {
         const scoreDiff = scoreForLength(b.length) - scoreForLength(a.length);
         if (scoreDiff !== 0) return scoreDiff;
+        if (a.fromLeaf !== b.fromLeaf) return a.fromLeaf ? -1 : 1;
         if (b.length !== a.length) return b.length - a.length;
         if (a.hasChild !== b.hasChild) return a.hasChild ? 1 : -1;
         return a.depth - b.depth;
       });
 
-      return candidates[0].text;
+      return usableCandidates[0].text;
     };
 
     const readReviewDate = (root) => {
@@ -1910,7 +2352,7 @@ function extractReviewsOnly() {
 
       // Extract review text - find the longest meaningful span
       const textSpans = reviewEl.querySelectorAll('span');
-      review.text = selectBestReviewText(textSpans);
+      review.text = extractReviewTextFromRaw(reviewEl) || selectBestReviewText(textSpans, reviewEl);
 
       // Extract date
       review.date = readReviewDate(reviewEl);

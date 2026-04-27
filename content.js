@@ -171,6 +171,33 @@ function getPropertyLinks() {
           return null;
         };
 
+        const parseReviewCountFromText = (source) => {
+          if (!source) {
+            return null;
+          }
+
+          const normalized = String(source).replace(/\s+/g, ' ').trim();
+          const patterns = [
+            /\b(?:from|show all|all)\s+(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+            /\b[0-5](?:\.\d{1,2})?\s+out of\s+5(?:\s+stars?)?\.?\s*[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+            /\b[0-5]\.\d{1,2}(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i,
+            /\b(\d{1,4}(?:,\d{3})*)\s+reviews?(?![a-z])/i
+          ];
+
+          for (const pattern of patterns) {
+            const match = normalized.match(pattern);
+            if (!match) {
+              continue;
+            }
+            const parsed = Number.parseInt(match[1].replace(/,/g, ''), 10);
+            if (Number.isFinite(parsed)) {
+              return String(parsed);
+            }
+          }
+
+          return null;
+        };
+
         for (const source of textCandidates) {
           if (!source) {
             continue;
@@ -184,9 +211,9 @@ function getPropertyLinks() {
           }
 
           if (!reviewCount) {
-            const reviewMatch = source.match(/\b(\d{1,4}(?:,\d{3})*)\b(?=\s*reviews?)/i);
-            if (reviewMatch) {
-              reviewCount = reviewMatch[1].replace(/,/g, '');
+            const parsedReviewCount = parseReviewCountFromText(source);
+            if (parsedReviewCount) {
+              reviewCount = parsedReviewCount;
               break;
             }
           }
