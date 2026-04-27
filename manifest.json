@@ -11,7 +11,8 @@
   ],
   "host_permissions": [
     "https://www.airbnb.co.uk/*",
-    "https://www.airbnb.com/*"
+    "https://www.airbnb.com/*",
+    "https://raw.githubusercontent.com/*"
   ],
   "action": {
     "default_popup": "popup.html",

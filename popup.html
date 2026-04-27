@@ -57,6 +57,24 @@
       font-size: 14px;
       color: #484848;
     }
+    #versionNotice {
+      display: none;
+      margin: 10px 0 12px;
+      padding: 8px 10px;
+      border-radius: 4px;
+      background-color: #FFF8E1;
+      color: #8A5A00;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    #versionNotice a {
+      color: #1976D2;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    #versionNotice a:hover {
+      text-decoration: underline;
+    }
     #resetLink {
       margin-top: 12px;
       font-size: 12px;
@@ -73,6 +91,7 @@
 </head>
 <body>
   <h2>Airbnb Wishlist/Listing Analyzer</h2>
+  <div id="versionNotice"></div>
   <div id="propertyCount"></div>
   <button id="startBtn">Start Analysis</button>
   <button id="copyBtn" style="display:none;">Copy Prompt</button>
