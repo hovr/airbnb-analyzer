@@ -12,7 +12,7 @@ Airbnb Analyzer is a Chrome extension that gathers details and reviews from Airb
 
 1. **Download the extension files**
    - Click the green `Code` button in GitHub and choose `Download ZIP`.
-   - When the download finishes, open the ZIP file and extract it to a folder you can find easily (for example, your Documents folder).
+   - When the download finishes, open the ZIP file and extract it to a folder you can find easily (once setup the folder needs to stay there for teh extension to work, don't delete it).
 
 2. **Open Chrome’s extensions page**
    - Open Google Chrome.
