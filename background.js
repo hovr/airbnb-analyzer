@@ -1615,6 +1615,28 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
 
   const capturedReviews = new Map();
 
+  const expandVisibleReviewTextButtons = async () => {
+    const buttons = Array.from(document.querySelectorAll('[data-review-id] button')).filter(button => {
+      const text = (button.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const aria = (button.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return text === 'show more' || aria === 'show more';
+    });
+
+    for (const button of buttons) {
+      if (!button || button.disabled) {
+        continue;
+      }
+      try {
+        button.click();
+        await wait(150);
+      } catch (error) {
+        console.debug('Failed to expand review text', error);
+      }
+    }
+
+    return buttons.length;
+  };
+
   const extractReviewTextFromRaw = (root) => {
     const raw = (root?.textContent || '').replace(/\s+/g, ' ').trim();
     if (!raw) {
@@ -1644,6 +1666,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     text = text
       .replace(/Translated\s+Show original.*$/i, '')
       .replace(/Show original.*$/i, '')
+      .replace(/\bShow more\b.*$/i, '')
       .replace(/\bResponse from .+$/i, '')
       .replace(/\bRating,\s*\d+\s+stars?,\s*·\s*/i, '')
       .trim();
@@ -1831,6 +1854,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
       target.dispatchEvent(new Event('scroll', { bubbles: true }));
     });
     await wait(900);
+    await expandVisibleReviewTextButtons();
     collectReviews();
   };
 
@@ -1876,10 +1900,12 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   let gaveUpEarly = false;
 
   await resetScrollableTargetsToTop();
+  await expandVisibleReviewTextButtons();
   lastCount = collectReviews();
 
   for (let cycle = 1; cycle <= MAX_SCROLL_CYCLES; cycle += 1) {
     await ensureReviewsContainerOpen();
+    await expandVisibleReviewTextButtons();
     collectReviews();
 
     const targets = getScrollableTargets();
@@ -1922,6 +1948,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     } else {
       await wait(anyMoved ? 800 : 1000);
     }
+    await expandVisibleReviewTextButtons();
 
     if (!expected || !Number.isFinite(expected)) {
       const badgeCount = readTotalBadge();
@@ -1988,6 +2015,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
   if (expected && capturedReviews.size < expected) {
     console.log('Running second review capture pass', { expected, captured: capturedReviews.size });
     await resetScrollableTargetsToTop();
+    await expandVisibleReviewTextButtons();
     let secondPassStalls = 0;
     const secondPassLimit = Math.max(40, expected * 3);
 
@@ -1996,6 +2024,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
       const targets = getScrollableTargets();
       const movementAttempts = await Promise.all(targets.map(ensureMovementOrRetry));
       await wait(1000);
+      await expandVisibleReviewTextButtons();
       collectReviews();
 
       if (capturedReviews.size > beforeCount) {
@@ -2010,6 +2039,7 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
     }
   }
 
+  await expandVisibleReviewTextButtons();
   collectReviews();
   const finalCount = capturedReviews.size;
   const missing = expected ? Math.max(0, expected - finalCount) : 0;
@@ -2031,10 +2061,11 @@ async function scrollAndLoadAllReviews(expectedTotal, propertyNumber = null, tot
 }
 
 // Extract only reviews from reviews page
-function extractReviewsOnly() {
+async function extractReviewsOnly() {
   const reviews = [];
   
   try {
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     console.log('Looking for reviews on reviews page...');
     
     // On the reviews modal page, reviews are in specific containers
@@ -2049,6 +2080,29 @@ function extractReviewsOnly() {
         console.log('Found reviews in section:', reviewElements.length);
       }
     }
+
+    const expandVisibleReviewTextButtons = async () => {
+      const buttons = Array.from(document.querySelectorAll('[data-review-id] button')).filter(button => {
+        const text = (button.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const aria = (button.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        return text === 'show more' || aria === 'show more';
+      });
+
+      for (const button of buttons) {
+        if (!button || button.disabled) {
+          continue;
+        }
+        try {
+          button.click();
+          await wait(150);
+        } catch (error) {
+          console.debug('Failed to expand review text', error);
+        }
+      }
+    };
+
+    await expandVisibleReviewTextButtons();
+    reviewElements = document.querySelectorAll('[data-review-id]');
 
     const extractReviewTextFromRaw = (root) => {
       const raw = (root?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -2079,6 +2133,7 @@ function extractReviewsOnly() {
       text = text
         .replace(/Translated\s+Show original.*$/i, '')
         .replace(/Show original.*$/i, '')
+        .replace(/\bShow more\b.*$/i, '')
         .replace(/\bResponse from .+$/i, '')
         .replace(/\bRating,\s*\d+\s+stars?,\s*·\s*/i, '')
         .trim();
