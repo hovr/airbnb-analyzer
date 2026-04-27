@@ -31,6 +31,28 @@ Airbnb Analyzer is a Chrome extension that gathers details and reviews from Airb
    - Click the puzzle-piece icon in Chrome’s toolbar (top-right).
    - Find “Airbnb Wishlist/Listing Analyzer” in the list and click the pin icon next to it so the extension icon stays visible.
 
+## How to update the extension
+
+The extension checks this GitHub repository when you open the popup. If a newer version is available, you will see a notice at the top of the popup.
+
+1. **Download the latest files**
+   - Open this GitHub repository.
+   - Click the green `Code` button and choose `Download ZIP`.
+   - Extract the ZIP file.
+
+2. **Replace your old extension folder**
+   - Find the folder you originally loaded into Chrome.
+   - Replace its contents with the newly extracted files, or delete the old folder and move the new extracted folder into the same place.
+   - Keep the folder somewhere permanent. Chrome needs these files to stay on your computer.
+
+3. **Reload the extension in Chrome**
+   - Open `chrome://extensions`.
+   - Find “Airbnb Wishlist/Listing Analyzer”.
+   - Click the reload button on that extension card.
+   - Open the extension popup again. The update notice should disappear once the loaded version matches the latest version.
+
+If you loaded the new files into a different folder, remove the old extension from `chrome://extensions`, then use **Load unpacked** again and select the new folder.
+
 ## How to use the extension
 
 1. **Open the Airbnb page you want to analyze**
@@ -65,6 +87,7 @@ Airbnb Analyzer is a Chrome extension that gathers details and reviews from Airb
 
 - **Extension not visible**: Make sure Developer Mode is still enabled on `chrome://extensions` and that the extension is toggled on.
 - **“Analysis already in progress” message**: Wait until the current run finishes, or refresh the wishlist page if you think the previous run got stuck.
+- **No properties found on a wishlist**: In some cases Airbnb may not have finished rendering the wishlist when the extension checks the page. Refresh the wishlist page and open the extension popup again; this normally fixes it.
 - **Airbnb pages not loading**: The extension works on Airbnb wishlist pages and individual room/listing pages. Confirm the URL includes `/wishlists/` or `/rooms/`.
 
 If you run into other issues, double-check that you extracted the full ZIP and loaded the folder containing `manifest.json`. You can remove the extension from `chrome://extensions` and load it again at any time.
