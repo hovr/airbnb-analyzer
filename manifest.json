@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Airbnb Wishlist Analyzer",
+  "name": "Airbnb Wishlist/Listing Analyzer",
   "version": "1.0",
   "description": "Extract property details and reviews from Airbnb wishlists for LLM analysis",
   "permissions": [
