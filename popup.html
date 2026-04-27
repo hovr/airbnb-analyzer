@@ -30,10 +30,16 @@
       cursor: not-allowed;
     }
     #status {
+      display: none;
       margin-top: 15px;
       padding: 10px;
       border-radius: 4px;
       font-size: 13px;
+    }
+    #status.info,
+    #status.success,
+    #status.error {
+      display: block;
     }
     .info {
       background-color: #E3F2FD;
