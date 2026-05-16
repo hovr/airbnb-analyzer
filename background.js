@@ -236,14 +236,14 @@ const isWishlistUrl = (url) => {
   if (typeof url !== 'string') {
     return false;
   }
-  return /^https:\/\/www\.airbnb\.(?:co\.uk|com)\/wishlists\//i.test(url);
+  return /^https:\/\/(?:www\.)?airbnb\.(?:co\.uk|com)\/wishlists(?:\/|$|[?#])/i.test(url);
 };
 
 const isRoomUrl = (url) => {
   if (typeof url !== 'string') {
     return false;
   }
-  return /^https:\/\/www\.airbnb\.(?:co\.uk|com)\/rooms\/\d+/i.test(url);
+  return /^https:\/\/(?:www\.)?airbnb\.(?:co\.uk|com)\/rooms\/\d+/i.test(url);
 };
 
 const convertIconToGrayscale = async (path) => {

@@ -28,20 +28,21 @@ const safeSendRuntimeMessage = (payload) => {
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'getWishlistInfo') {
-    const propertyLinks = getPropertyLinks();
-    chrome.storage.local.set({ propertyCount: propertyLinks.length, extractionInProgress });
-    const response = {
-      status: 'ok',
-      propertyCount: propertyLinks.length,
-      extractionInProgress
-    };
-    if (message.includePropertyLinks) {
-      response.propertyLinks = propertyLinks;
-    }
-    sendResponse({
-      ...response
+    waitForPropertyLinks().then((propertyLinks) => {
+      chrome.storage.local.set({ propertyCount: propertyLinks.length, extractionInProgress });
+      const response = {
+        status: 'ok',
+        propertyCount: propertyLinks.length,
+        extractionInProgress
+      };
+      if (message.includePropertyLinks) {
+        response.propertyLinks = propertyLinks;
+      }
+      sendResponse({
+        ...response
+      });
     });
-    return false;
+    return true;
   }
 
   if (message.action === 'complete' || message.action === 'error') {
@@ -54,8 +55,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'startExtraction') {
-    const initiateExtraction = () => {
-      const propertyLinks = getPropertyLinks();
+    const initiateExtraction = async () => {
+      const propertyLinks = await waitForPropertyLinks();
 
       if (propertyLinks.length === 0) {
         safeSendRuntimeMessage({
@@ -107,6 +108,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+const WISHLIST_RENDER_TIMEOUT_MS = 8000;
+const WISHLIST_RENDER_POLL_MS = 300;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPropertyLinks(timeoutMs = WISHLIST_RENDER_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  let propertyLinks = getPropertyLinks();
+
+  while (propertyLinks.length === 0 && Date.now() - startedAt < timeoutMs) {
+    await delay(WISHLIST_RENDER_POLL_MS);
+    propertyLinks = getPropertyLinks();
+  }
+
+  return propertyLinks;
+}
 
 // Get all property links and titles from the wishlist
 function getPropertyLinks() {
@@ -236,8 +256,7 @@ function getPropertyLinks() {
   return properties;
 }
 
-// Initialize - get property count when page loads
-setTimeout(() => {
-  const propertyLinks = getPropertyLinks();
+// Initialize - get property count when Airbnb has had a chance to render wishlist cards
+waitForPropertyLinks().then((propertyLinks) => {
   chrome.storage.local.set({ propertyCount: propertyLinks.length });
-}, 1000);
+});

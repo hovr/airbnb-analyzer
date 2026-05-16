@@ -25,7 +25,9 @@
   "content_scripts": [
     {
       "matches": [
+        "https://www.airbnb.co.uk/wishlists",
         "https://www.airbnb.co.uk/wishlists/*",
+        "https://www.airbnb.com/wishlists",
         "https://www.airbnb.com/wishlists/*"
       ],
       "js": ["content.js"]

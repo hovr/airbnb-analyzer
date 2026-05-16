@@ -14,7 +14,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     copyBtn.style.display = 'none';
   };
 
-  const isWishlistUrl = (url) => typeof url === 'string' && url.includes('/wishlists/');
+  const isWishlistUrl = (url) => typeof url === 'string' && /\/wishlists(?:\/|$|[?#])/i.test(url);
+  const isWishlistDetailUrl = (url) => typeof url === 'string' && /\/wishlists\/[^/?#]+/i.test(url);
   const isRoomUrl = (url) => typeof url === 'string' && /\/rooms\/\d+/i.test(url);
 
   resetStatus();
@@ -22,7 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  const mode = isWishlistUrl(tab?.url) ? 'wishlist' : (isRoomUrl(tab?.url) ? 'room' : 'unsupported');
+  const mode = isWishlistDetailUrl(tab?.url) ? 'wishlist' : (isWishlistUrl(tab?.url) ? 'wishlistIndex' : (isRoomUrl(tab?.url) ? 'room' : 'unsupported'));
 
   const state = await chrome.storage.local.get([
     'extractionInProgress',
@@ -126,6 +127,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  if (mode === 'wishlistIndex') {
+    propertyCount.textContent = '';
+    status.textContent = 'Please click a wishlist to get started.';
+    status.className = 'info';
+    startBtn.disabled = true;
+    updateResetVisibility(state);
+    return;
+  }
+
   if (mode === 'room') {
     updatePropertyCountDisplay();
   }
@@ -144,8 +154,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateCompletionState(state.lastExtractionTotal);
   }
 
-  if (mode === 'wishlist' && typeof state.propertyCount === 'number') {
-    updatePropertyCountDisplay(state.propertyCount);
+  if (mode === 'wishlist') {
+    propertyCount.textContent = 'Checking wishlist properties...';
   }
 
   const refreshWishlistInfo = async (options = {}) => {
