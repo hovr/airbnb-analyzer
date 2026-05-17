@@ -14,7 +14,7 @@ It collects listing details, amenities, and reviews from an Airbnb wishlist or a
 
 ## How to install it
 
-1. Download the ZIP file for this extension.
+1. [Download the ZIP file for this extension](https://github.com/hovr/airbnb-analyzer/archive/refs/heads/main.zip).
 2. Open the ZIP file and move the extracted folder somewhere safe. Do not delete the folder after installing.
 3. Open Chrome and go to:
 
