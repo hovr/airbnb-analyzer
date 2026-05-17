@@ -10,7 +10,9 @@ It collects listing details, amenities, and reviews from an Airbnb wishlist or a
 - Works on individual Airbnb room/listing pages
 - Collects useful listing details and guest reviews
 - Builds a prompt you can copy into ChatGPT or another AI assistant
-- Helps you spot possible issues, patterns, or red flags before booking
+- Spots possible issues, patterns, or red flags before booking
+- The AI assistant will be aware of property details and all reviews so you can quiz it about any requirements/issues.
+- It will also try to give you the best and worst of wishlist listings (you can ask it to re-assess the lists based on your own criteria).
 
 ## 🚀 How to install it
 
