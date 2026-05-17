@@ -24,7 +24,7 @@ It collects listing details, amenities, and reviews from an Airbnb wishlist or a
 
 4. Turn on **Developer mode** in the top-right corner.
 5. Click **Load unpacked**.
-6. Select the extracted folder that contains `manifest.json` (it may be named `airbnb-analyzer-main`).
+6. Select the extracted folder (it may be named `airbnb-analyzer-main`).
 7. The extension should now appear in Chrome.
 8. Click the puzzle-piece icon in Chrome and pin the extension.
 
