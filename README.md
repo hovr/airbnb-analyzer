@@ -42,7 +42,7 @@ It collects listing details, amenities, and reviews from an Airbnb wishlist or a
 
 ### 🔎 Analyze one listing
 
-1. Open an Airbnb listing page. The URL should include `/rooms/`.
+1. Open an Airbnb listing page.
 2. Click the Airbnb Analyzer extension icon.
 3. Click **Start Analysis**.
 4. When it finishes, click **Copy Prompt**.
@@ -52,7 +52,7 @@ It collects listing details, amenities, and reviews from an Airbnb wishlist or a
 
 The extension may open property tabs while it gathers details and reviews. This can take a few minutes, especially for long wishlists or listings with lots of reviews.
 
-Try not to close or change the tabs while the extension is working.
+Try not to close or change the tabs while the extension is working and leave the browser in view!
 
 ## 🔄 Updating the extension
 
@@ -62,7 +62,7 @@ To update:
 
 1. Download the latest ZIP file.
 2. Replace your old extension folder with the new extracted folder.
-3. Go to `chrome://extensions`.
+3. Open Chrome and go to **Settings > Extensions**.
 4. Click the reload button on the Airbnb Analyzer card.
 
 ## ⬇️ Download
