@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Airbnb Wishlist/Listing Analyzer",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "description": "Extract property details and reviews from Airbnb wishlists for LLM analysis",
   "icons": {
     "16": "icon16.png",
@@ -18,6 +18,8 @@
   "host_permissions": [
     "https://www.airbnb.co.uk/*",
     "https://www.airbnb.com/*",
+    "https://airbnb.co.uk/*",
+    "https://airbnb.com/*",
     "https://raw.githubusercontent.com/*"
   ],
   "action": {
@@ -35,7 +37,11 @@
         "https://www.airbnb.co.uk/wishlists",
         "https://www.airbnb.co.uk/wishlists/*",
         "https://www.airbnb.com/wishlists",
-        "https://www.airbnb.com/wishlists/*"
+        "https://www.airbnb.com/wishlists/*",
+        "https://airbnb.co.uk/wishlists",
+        "https://airbnb.co.uk/wishlists/*",
+        "https://airbnb.com/wishlists",
+        "https://airbnb.com/wishlists/*"
       ],
       "js": [
         "content.js"

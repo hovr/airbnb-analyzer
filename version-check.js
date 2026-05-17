@@ -28,11 +28,15 @@ const checkForNewerVersion = async (versionNotice) => {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4000);
-    const response = await fetch(`${LATEST_MANIFEST_URL}?t=${Date.now()}`, {
-      cache: 'no-store',
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
+    let response;
+    try {
+      response = await fetch(`${LATEST_MANIFEST_URL}?t=${Date.now()}`, {
+        cache: 'no-store',
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       return;
@@ -43,7 +47,16 @@ const checkForNewerVersion = async (versionNotice) => {
     const latestVersion = remoteManifest?.version;
 
     if (latestVersion && compareVersions(currentVersion, latestVersion) > 0) {
-      versionNotice.innerHTML = `New version available: ${latestVersion}. You are using ${currentVersion}. <a href="${RELEASES_URL}" target="_blank" rel="noopener noreferrer">View update</a>`;
+      versionNotice.textContent = '';
+      versionNotice.append(
+        `New version available: ${latestVersion}. You are using ${currentVersion}. `
+      );
+      const updateLink = document.createElement('a');
+      updateLink.href = RELEASES_URL;
+      updateLink.target = '_blank';
+      updateLink.rel = 'noopener noreferrer';
+      updateLink.textContent = 'View update';
+      versionNotice.append(updateLink);
       versionNotice.style.display = 'block';
     }
   } catch (error) {
