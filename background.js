@@ -116,6 +116,8 @@ async function restoreVersionUpdateIconState() {
 
 let inactiveIconDataCache = null;
 let inactiveIconDataPromise = null;
+let inactiveUpdateIconDataCache = null;
+let inactiveUpdateIconDataPromise = null;
 let lastActionWasWishlist = null;
 let versionUpdateAvailable = false;
 
@@ -387,36 +389,66 @@ const convertIconToGrayscale = async (path) => {
   }
 };
 
-const loadInactiveIconData = async () => {
-  if (inactiveIconDataCache) {
-    return inactiveIconDataCache;
+const loadGrayscaleIconData = async (iconPaths, cacheState) => {
+  if (cacheState.data) {
+    return cacheState.data;
   }
-  if (inactiveIconDataPromise) {
-    return inactiveIconDataPromise;
+  if (cacheState.promise) {
+    return cacheState.promise;
   }
 
-  inactiveIconDataPromise = (async () => {
+  cacheState.promise = (async () => {
     const entries = await Promise.all(
-      Object.entries(ACTIVE_ICON_PATHS).map(async ([size, path]) => {
+      Object.entries(iconPaths).map(async ([size, path]) => {
         const grayscaleData = await convertIconToGrayscale(path);
         return [size, grayscaleData];
       })
     );
-    inactiveIconDataCache = entries.reduce((acc, [size, imageData]) => {
+    cacheState.data = entries.reduce((acc, [size, imageData]) => {
       if (imageData) {
         acc[size] = imageData;
       }
       return acc;
     }, {});
-    return inactiveIconDataCache;
+    return cacheState.data;
   })();
 
   try {
-    return await inactiveIconDataPromise;
+    return await cacheState.promise;
   } finally {
-    inactiveIconDataPromise = null;
+    cacheState.promise = null;
   }
 };
+
+const loadInactiveIconData = () => loadGrayscaleIconData(ACTIVE_ICON_PATHS, {
+  get data() {
+    return inactiveIconDataCache;
+  },
+  set data(value) {
+    inactiveIconDataCache = value;
+  },
+  get promise() {
+    return inactiveIconDataPromise;
+  },
+  set promise(value) {
+    inactiveIconDataPromise = value;
+  }
+});
+
+const loadInactiveUpdateIconData = () => loadGrayscaleIconData(UPDATE_ICON_PATHS, {
+  get data() {
+    return inactiveUpdateIconDataCache;
+  },
+  set data(value) {
+    inactiveUpdateIconDataCache = value;
+  },
+  get promise() {
+    return inactiveUpdateIconDataPromise;
+  },
+  set promise(value) {
+    inactiveUpdateIconDataPromise = value;
+  }
+});
 
 const setActionState = async (isWishlistActive) => {
   const targetState = Boolean(isWishlistActive);
@@ -428,7 +460,16 @@ const setActionState = async (isWishlistActive) => {
     await chrome.action.setPopup({ popup: targetState ? 'popup.html' : 'inactive.html' });
 
     if (versionUpdateAvailable) {
-      await chrome.action.setIcon({ path: UPDATE_ICON_PATHS });
+      if (targetState) {
+        await chrome.action.setIcon({ path: UPDATE_ICON_PATHS });
+      } else {
+        const iconData = await loadInactiveUpdateIconData();
+        if (iconData && Object.keys(iconData).length) {
+          await chrome.action.setIcon({ imageData: iconData });
+        } else {
+          await chrome.action.setIcon({ path: UPDATE_ICON_PATHS });
+        }
+      }
       lastActionWasWishlist = targetState;
       return;
     }
