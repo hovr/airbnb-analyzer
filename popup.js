@@ -1,6 +1,9 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const startBtn = document.getElementById('startBtn');
   const copyBtn = document.getElementById('copyBtn');
+  const sendControls = document.getElementById('sendControls');
+  const sendDestination = document.getElementById('sendDestination');
+  const sendBtn = document.getElementById('sendBtn');
   const status = document.getElementById('status');
   const versionNotice = document.getElementById('versionNotice');
   const propertyCount = document.getElementById('propertyCount');
@@ -12,6 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     status.textContent = '';
     status.className = '';
     copyBtn.style.display = 'none';
+    sendControls.style.display = 'none';
   };
 
   const isWishlistUrl = (url) => typeof url === 'string' && /\/wishlists(?:\/|$|[?#])/i.test(url);
@@ -33,8 +37,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     'analysisPrompt',
     'lastExtractionTotal',
     'activePropertyIndices',
-    'completedPropertyCount'
+    'completedPropertyCount',
+    'selectedLLMDestination'
   ]);
+
+  const destinations = {
+    chatgpt: {
+      label: 'ChatGPT',
+      url: 'https://chatgpt.com/'
+    },
+    claude: {
+      label: 'Claude',
+      url: 'https://claude.ai/new'
+    }
+  };
+
+  const selectedDestination = destinations[state.selectedLLMDestination] ? state.selectedLLMDestination : 'chatgpt';
+  sendDestination.value = selectedDestination;
 
   const shouldShowReset = (stateObj) => {
     if (!stateObj) {
@@ -105,6 +124,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     status.textContent = `Analysis complete! Processed ${totalProcessed} properties.`;
     status.className = 'success';
     copyBtn.style.display = 'block';
+    sendControls.style.display = 'flex';
   };
 
   const formatActiveList = (completed, activeList, total) => {
@@ -284,6 +304,42 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } catch (error) {
       status.textContent = 'Error copying: ' + error.message;
+      status.className = 'error';
+    }
+  });
+
+  sendDestination.addEventListener('change', async () => {
+    const value = destinations[sendDestination.value] ? sendDestination.value : 'chatgpt';
+    await chrome.storage.local.set({ selectedLLMDestination: value });
+  });
+
+  sendBtn.addEventListener('click', async () => {
+    try {
+      const destinationKey = destinations[sendDestination.value] ? sendDestination.value : 'chatgpt';
+      const destination = destinations[destinationKey];
+      const result = await chrome.storage.local.get(['analysisPrompt']);
+
+      if (!result.analysisPrompt) {
+        status.textContent = 'No prompt found. Run the analysis again.';
+        status.className = 'error';
+        return;
+      }
+
+      await chrome.storage.local.set({ selectedLLMDestination: destinationKey });
+      await navigator.clipboard.writeText(result.analysisPrompt);
+      const response = await chrome.runtime.sendMessage({
+        action: 'openLLMWithPrompt',
+        destination: destinationKey
+      });
+
+      if (response?.status === 'opened') {
+        status.textContent = `Prompt opened in ${destination.label}.`;
+      } else {
+        status.textContent = `Prompt copied. Paste it into ${destination.label}.`;
+      }
+      status.className = 'success';
+    } catch (error) {
+      status.textContent = 'Error sending prompt: ' + error.message;
       status.className = 'error';
     }
   });

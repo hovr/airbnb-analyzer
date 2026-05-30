@@ -72,6 +72,35 @@
       font-size: 14px;
       color: #484848;
     }
+    #sendControls {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    #sendControls label {
+      flex: 0 0 auto;
+      font-size: 13px;
+      color: #484848;
+    }
+    #sendDestination {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid #d6d6d6;
+      border-radius: 6px;
+      background-color: #fff;
+      color: #222;
+      font-size: 13px;
+    }
+    #sendBtn {
+      flex: 0 0 auto;
+      width: auto;
+      margin-bottom: 0;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
     #versionNotice {
       display: none;
       margin: 10px 0 12px;
@@ -110,6 +139,14 @@
   <div id="propertyCount"></div>
   <button id="startBtn">Start Analysis</button>
   <button id="copyBtn" style="display:none;">Copy Prompt</button>
+  <div id="sendControls">
+    <label for="sendDestination">Send to</label>
+    <select id="sendDestination">
+      <option value="chatgpt">ChatGPT</option>
+      <option value="claude">Claude</option>
+    </select>
+    <button id="sendBtn" type="button">Send</button>
+  </div>
   <div id="status"></div>
   <div id="resetLink" style="display:none; margin-top:12px; font-size:12px; text-align:center;">
     <a href="#" id="resetState">Reset</a>

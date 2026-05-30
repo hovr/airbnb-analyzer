@@ -619,7 +619,163 @@ const safeSendRuntimeMessage = (payload) => {
   }
 };
 
+const LLM_DESTINATIONS = {
+  chatgpt: {
+    url: 'https://chatgpt.com/',
+    label: 'ChatGPT'
+  },
+  claude: {
+    url: 'https://claude.ai/new',
+    label: 'Claude'
+  }
+};
+
+const waitForTabReady = (tabId, timeoutMs = 30000) => new Promise((resolve) => {
+  let settled = false;
+  chrome.tabs.get(tabId, (tab) => {
+    if (settled || chrome.runtime.lastError) {
+      return;
+    }
+    if (tab?.status === 'complete') {
+      settled = true;
+      clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(true);
+    }
+  });
+
+  const timeoutId = setTimeout(() => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    chrome.tabs.onUpdated.removeListener(listener);
+    resolve(false);
+  }, timeoutMs);
+
+  const listener = (updatedTabId, changeInfo) => {
+    if (updatedTabId !== tabId || changeInfo.status !== 'complete') {
+      return;
+    }
+    if (settled) {
+      return;
+    }
+    settled = true;
+    clearTimeout(timeoutId);
+    chrome.tabs.onUpdated.removeListener(listener);
+    resolve(true);
+  };
+
+  chrome.tabs.onUpdated.addListener(listener);
+});
+
+const fillLLMComposer = async (tabId, destinationKey, promptText) => {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (destination, text) => {
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const selectors = destination === 'claude'
+        ? [
+            '[contenteditable="true"][role="textbox"]',
+            'div.ProseMirror[contenteditable="true"]',
+            '[contenteditable="true"]',
+            'textarea'
+          ]
+        : [
+            '#prompt-textarea',
+            '[data-testid="composer-input"]',
+            '[contenteditable="true"][role="textbox"]',
+            'textarea'
+          ];
+
+      const findComposer = () => {
+        for (const selector of selectors) {
+          const elements = Array.from(document.querySelectorAll(selector));
+          const visible = elements.find((element) => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          });
+          if (visible) {
+            return visible;
+          }
+        }
+        return null;
+      };
+
+      let composer = null;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        composer = findComposer();
+        if (composer) {
+          break;
+        }
+        await delay(250);
+      }
+
+      if (!composer) {
+        throw new Error('Composer not found');
+      }
+
+      composer.focus();
+
+      if (composer.tagName === 'TEXTAREA' || composer.tagName === 'INPUT') {
+        const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(composer), 'value');
+        if (descriptor?.set) {
+          descriptor.set.call(composer, text);
+        } else {
+          composer.value = text;
+        }
+      } else {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        const inserted = document.execCommand('insertText', false, text);
+        if (!inserted) {
+          composer.textContent = text;
+        }
+      }
+
+      composer.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: text
+      }));
+      composer.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    args: [destinationKey, promptText]
+  });
+};
+
+const openLLMWithPrompt = async (destinationKey) => {
+  const destination = LLM_DESTINATIONS[destinationKey] || LLM_DESTINATIONS.chatgpt;
+  const result = await chrome.storage.local.get(['analysisPrompt']);
+
+  if (!result.analysisPrompt) {
+    return { status: 'error', error: 'No prompt found' };
+  }
+
+  const tab = await chrome.tabs.create({ url: destination.url, active: true });
+  await waitForTabReady(tab.id);
+
+  try {
+    await fillLLMComposer(tab.id, destinationKey, result.analysisPrompt);
+    return { status: 'opened', filled: true };
+  } catch (error) {
+    console.debug(`Could not fill ${destination.label} prompt field:`, error?.message || error);
+    return { status: 'opened', filled: false };
+  }
+};
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  if (message.action === 'openLLMWithPrompt') {
+    openLLMWithPrompt(message.destination).then(sendResponse).catch((error) => {
+      sendResponse({ status: 'error', error: error?.message || 'Failed to open prompt' });
+    });
+    return true;
+  }
 
   if (message.action === 'extractProperties') {
     // Start the extraction process
